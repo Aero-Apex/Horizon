@@ -30,6 +30,10 @@ pub struct RecipeInfo {
     /// A shaped recipe's grid cells, row by row (`width` x `height`): the
     /// index into `ingredients` each holds, none for an empty cell.
     pub cells: Vec<Option<usize>>,
+    /// A fuel's burn time in ticks and the items one burn smelts (both 0 for
+    /// the recipes).
+    pub burn_time: i32,
+    pub smelt_count: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -85,11 +89,7 @@ impl Tags {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter_map(|e| {
-                        e.as_str()
-                            .or_else(|| e["id"].as_str())
-                            .map(str::to_owned)
-                    })
+                    .filter_map(|e| e.as_str().or_else(|| e["id"].as_str()).map(str::to_owned))
                     .collect();
                 (format!("minecraft:{name}"), values)
             })
@@ -206,6 +206,8 @@ fn parse(id: String, v: &Value, tags: &Tags) -> Option<RecipeInfo> {
         width,
         height,
         cells,
+        burn_time: 0,
+        smelt_count: 0.0,
     })
 }
 
@@ -229,7 +231,10 @@ impl RecipeTable {
     }
     /// The recipes that make `item`.
     pub fn producing(&self, item: &str) -> Vec<&RecipeInfo> {
-        self.recipes.iter().filter(|r| r.result == item).collect()
+        self.recipes
+            .iter()
+            .filter(|r| !r.result.is_empty() && r.result == item)
+            .collect()
     }
     /// The recipes that take `item` as an ingredient.
     pub fn consuming(&self, item: &str) -> Vec<&RecipeInfo> {
@@ -237,6 +242,31 @@ impl RecipeTable {
             .iter()
             .filter(|r| r.ingredients.iter().any(|s| s.iter().any(|i| i == item)))
             .collect()
+    }
+    /// Adds a fuel: `item` burns for `burn_time` ticks in the furnace of
+    /// `station` and smelts `smelt_count` items a burn (`FuelRecipeMaker`). A
+    /// fuel makes nothing, so it is only found by what uses it.
+    pub fn add_fuel(
+        &mut self,
+        kind: &str,
+        station: &str,
+        item: &str,
+        burn_time: i32,
+        smelt_count: f32,
+    ) {
+        self.recipes.push(RecipeInfo {
+            id: format!("{kind}/{item}"),
+            kind: kind.to_owned(),
+            station: station.to_owned(),
+            result: String::new(),
+            result_count: 0,
+            ingredients: vec![vec![item.to_owned()]],
+            width: 0,
+            height: 0,
+            cells: Vec::new(),
+            burn_time,
+            smelt_count,
+        });
     }
     /// Ids of items some recipe makes whose id contains `query` (lower case
     /// compared), sorted, at most [`MAX_SEARCH`].
@@ -246,7 +276,7 @@ impl RecipeTable {
             .recipes
             .iter()
             .map(|r| &r.result)
-            .filter(|id| id.to_lowercase().contains(&query))
+            .filter(|id| !id.is_empty() && id.to_lowercase().contains(&query))
             .cloned()
             .collect();
         found.sort();
@@ -346,10 +376,7 @@ mod tests {
         assert_eq!(table_recipe.station, "minecraft:crafting_table");
         // The grid keeps its shape: 2 x 2, every cell filled.
         assert_eq!((table_recipe.width, table_recipe.height), (2, 2));
-        assert_eq!(
-            table_recipe.cells,
-            vec![Some(0), Some(1), Some(2), Some(3)]
-        );
+        assert_eq!(table_recipe.cells, vec![Some(0), Some(1), Some(2), Some(3)]);
         // The torch is one column: coal over stick.
         assert_eq!((torch[0].width, torch[0].height), (1, 2));
         assert_eq!(torch[0].cells, vec![Some(0), Some(1)]);
@@ -363,5 +390,23 @@ mod tests {
         assert_eq!(table.consuming("minecraft:birch_planks").len(), 2);
         assert_eq!(table.search("TORCH"), ["minecraft:torch"]);
         assert!(table.search("nothing_like_this").is_empty());
+    }
+
+    #[test]
+    fn fuels_are_used_not_made() {
+        let mut table = RecipeTable::default();
+        table.add_fuel(
+            "minecraft:fuel_smelting",
+            "minecraft:furnace",
+            "minecraft:coal",
+            1600,
+            1.0,
+        );
+        let uses = table.consuming("minecraft:coal");
+        assert_eq!(uses.len(), 1);
+        assert_eq!((uses[0].burn_time, uses[0].smelt_count), (1600, 1.0));
+        assert_eq!(uses[0].station, "minecraft:furnace");
+        assert!(table.producing("").is_empty());
+        assert!(table.search("coal").is_empty());
     }
 }

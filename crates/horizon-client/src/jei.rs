@@ -101,13 +101,21 @@ impl RecipeView {
     pub fn step(&mut self, forward: bool, per_page: usize) {
         let n = self.pages(per_page);
         let page = self.page.min(n - 1);
-        self.page = if forward { (page + 1) % n } else { (page + n - 1) % n };
+        self.page = if forward {
+            (page + 1) % n
+        } else {
+            (page + n - 1) % n
+        };
     }
     /// Steps through the categories, wrapping round.
     pub fn step_category(&mut self, forward: bool) {
         let n = self.groups.len();
         let now = self.category.min(n - 1);
-        self.select(if forward { (now + 1) % n } else { (now + n - 1) % n });
+        self.select(if forward {
+            (now + 1) % n
+        } else {
+            (now + n - 1) % n
+        });
     }
     pub fn select(&mut self, category: usize) {
         self.category = category.min(self.groups.len() - 1);
@@ -135,6 +143,10 @@ pub enum Category {
     Stonecutting,
     Smithing,
     Transmute,
+    /// `Smelting Fuel`, `Smoking Fuel` and `Blasting Fuel`: items a furnace burns.
+    SmeltingFuel,
+    SmokingFuel,
+    BlastingFuel,
 }
 impl Category {
     pub fn of(kind: &str) -> Self {
@@ -146,6 +158,9 @@ impl Category {
             "minecraft:stonecutting" => Category::Stonecutting,
             "minecraft:smithing_transform" => Category::Smithing,
             "minecraft:crafting_transmute" => Category::Transmute,
+            "minecraft:fuel_smelting" => Category::SmeltingFuel,
+            "minecraft:fuel_smoking" => Category::SmokingFuel,
+            "minecraft:fuel_blasting" => Category::BlastingFuel,
             _ => Category::Crafting,
         }
     }
@@ -159,6 +174,9 @@ impl Category {
             Category::Stonecutting => "Stonecutting",
             Category::Smithing => "Smithing",
             Category::Transmute => "Crafting",
+            Category::SmeltingFuel => "Smelting Fuel",
+            Category::SmokingFuel => "Smoking Fuel",
+            Category::BlastingFuel => "Blasting Fuel",
         }
     }
     /// The category whose tab holds this one (a transmute is crafting).
@@ -178,6 +196,9 @@ impl Category {
             Category::Campfire => "minecraft:campfire",
             Category::Stonecutting => "minecraft:stonecutter",
             Category::Smithing => "minecraft:smithing_table",
+            Category::SmeltingFuel => "minecraft:furnace",
+            Category::SmokingFuel => "minecraft:smoker",
+            Category::BlastingFuel => "minecraft:blast_furnace",
         }
     }
     /// The height of a recipe's slots, as `layout` sizes them.
@@ -186,6 +207,7 @@ impl Category {
             Category::Crafting | Category::Transmute => 3.0 * SLOT,
             Category::Smithing => SLOT,
             Category::Stonecutting => 42.0,
+            Category::SmeltingFuel | Category::SmokingFuel | Category::BlastingFuel => 34.0,
             _ => 40.0,
         }
     }
@@ -193,7 +215,13 @@ impl Category {
     pub fn burns(self) -> bool {
         matches!(
             self,
-            Category::Smelting | Category::Blasting | Category::Smoking | Category::Campfire
+            Category::Smelting
+                | Category::Blasting
+                | Category::Smoking
+                | Category::Campfire
+                | Category::SmeltingFuel
+                | Category::SmokingFuel
+                | Category::BlastingFuel
         )
     }
 }
@@ -210,6 +238,8 @@ pub struct Layout {
     pub flame: Option<(f32, f32)>,
     /// The window's content size.
     pub size: (f32, f32),
+    /// A fuel's smelt count text: its top left, the text centred in the rest of the window.
+    pub note: Option<(f32, f32)>,
 }
 
 pub fn layout(r: &RecipeInfo) -> Layout {
@@ -235,6 +265,7 @@ pub fn layout(r: &RecipeInfo) -> Layout {
                 arrow: (58.0, SLOT + 1.0),
                 flame: None,
                 size: (110.0, 3.0 * SLOT),
+                note: None,
             }
         }
         Category::Smithing | Category::Transmute => {
@@ -245,6 +276,7 @@ pub fn layout(r: &RecipeInfo) -> Layout {
                 arrow: (n as f32 * 22.0 + 2.0, 1.0),
                 flame: None,
                 size: (n as f32 * 22.0 + 46.0, SLOT),
+                note: None,
             }
         }
         Category::Stonecutting => Layout {
@@ -253,6 +285,16 @@ pub fn layout(r: &RecipeInfo) -> Layout {
             arrow: (26.0, 13.0),
             flame: None,
             size: (76.0, 42.0),
+            note: None,
+        },
+        // A fuel: the item and its flame, the smelt count beside them, no result.
+        Category::SmeltingFuel | Category::SmokingFuel | Category::BlastingFuel => Layout {
+            inputs: vec![(0.0, 16.0, 0)],
+            output: (0.0, 0.0),
+            arrow: (0.0, 0.0),
+            flame: Some((1.0, 0.0)),
+            size: (140.0, 34.0),
+            note: Some((20.0, 0.0)),
         },
         _ => Layout {
             inputs: vec![(0.0, 0.0, 0)],
@@ -260,8 +302,20 @@ pub fn layout(r: &RecipeInfo) -> Layout {
             arrow: (28.0, 9.0),
             flame: Some((2.0, 22.0)),
             size: (80.0, 40.0),
+            note: None,
         },
     }
+}
+
+/// `FuelCategory.createSmeltCountText`: "Smelts 1 item", else the count with up
+/// to two decimals ("Smelts 2.5 items").
+pub fn smelt_count_text(count: f32) -> String {
+    if count == 1.0 {
+        return "Smelts 1 item".to_owned();
+    }
+    let shown = format!("{count:.2}");
+    let shown = shown.trim_end_matches('0').trim_end_matches('.');
+    format!("Smelts {shown} items")
 }
 
 /// Width of the recipe window.
@@ -394,10 +448,7 @@ pub fn parse_query(query: &str) -> Vec<Vec<Part>> {
 
 /// Whether the search needs the tooltip text (it is slow to make).
 pub fn needs_tooltip(query: &[Vec<Part>]) -> bool {
-    query
-        .iter()
-        .flatten()
-        .any(|p| p.field == Field::Tooltip)
+    query.iter().flatten().any(|p| p.field == Field::Tooltip)
 }
 
 /// Whether `item` passes every term.
@@ -493,7 +544,12 @@ pub fn panel(width: f32, height: f32, menu_right: f32) -> Option<Panel> {
 mod tests {
     use super::*;
 
-    fn recipe(kind: &str, ingredients: &[&[&str]], width: usize, cells: &[Option<usize>]) -> RecipeInfo {
+    fn recipe(
+        kind: &str,
+        ingredients: &[&[&str]],
+        width: usize,
+        cells: &[Option<usize>],
+    ) -> RecipeInfo {
         RecipeInfo {
             id: "minecraft:test".into(),
             kind: kind.into(),
@@ -505,8 +561,10 @@ mod tests {
                 .map(|alts| alts.iter().map(|s| (*s).to_owned()).collect())
                 .collect(),
             width,
-            height: if width == 0 { 0 } else { cells.len() / width },
+            height: cells.len().checked_div(width).unwrap_or(0),
             cells: cells.to_vec(),
+            burn_time: 0,
+            smelt_count: 0.0,
         }
     }
 
@@ -527,7 +585,17 @@ mod tests {
             "minecraft:crafting_shaped",
             &[&["minecraft:cobblestone"], &["minecraft:stick"]],
             3,
-            &[Some(0), Some(0), Some(0), None, Some(1), None, None, Some(1), None],
+            &[
+                Some(0),
+                Some(0),
+                Some(0),
+                None,
+                Some(1),
+                None,
+                None,
+                Some(1),
+                None,
+            ],
         );
         let l = layout(&pick);
         assert_eq!(l.inputs.len(), 5);
@@ -556,7 +624,28 @@ mod tests {
         assert!(l.flame.is_some());
         assert!(Category::of("minecraft:smoking").burns());
         assert!(!Category::of("minecraft:stonecutting").burns());
-        let cut = layout(&recipe("minecraft:stonecutting", &[&["minecraft:stone"]], 0, &[]));
+        assert!(Category::of("minecraft:fuel_blasting").burns());
+        assert_eq!(
+            Category::of("minecraft:fuel_smoking").title(),
+            "Smoking Fuel"
+        );
+        assert_eq!(smelt_count_text(1.0), "Smelts 1 item");
+        assert_eq!(smelt_count_text(2.0), "Smelts 2 items");
+        assert_eq!(smelt_count_text(2.5), "Smelts 2.5 items");
+        let fuel = layout(&recipe(
+            "minecraft:fuel_smelting",
+            &[&["minecraft:coal"]],
+            0,
+            &[],
+        ));
+        assert_eq!(fuel.inputs, vec![(0.0, 16.0, 0)]);
+        assert_eq!(fuel.note, Some((20.0, 0.0)));
+        let cut = layout(&recipe(
+            "minecraft:stonecutting",
+            &[&["minecraft:stone"]],
+            0,
+            &[],
+        ));
         assert!(cut.flame.is_none());
     }
 
@@ -569,7 +658,10 @@ mod tests {
             &[],
         );
         let l = layout(&r);
-        assert_eq!(l.inputs, vec![(0.0, 0.0, 0), (22.0, 0.0, 1), (44.0, 0.0, 2)]);
+        assert_eq!(
+            l.inputs,
+            vec![(0.0, 0.0, 0), (22.0, 0.0, 1), (44.0, 0.0, 2)]
+        );
         assert_eq!(l.output.1, 0.0);
     }
 
@@ -581,19 +673,33 @@ mod tests {
         let recipes = dir.join("data/minecraft/recipe");
         std::fs::create_dir_all(&recipes).unwrap();
         for (name, json) in [
-            ("a", r###"{"type":"minecraft:smelting","ingredient":"minecraft:cobblestone","result":{"id":"minecraft:stone"}}"###),
-            ("b", r###"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:cobblestone"],"result":{"id":"minecraft:stone_button"}}"###),
-            ("c", r###"{"type":"minecraft:stonecutting","ingredient":"minecraft:cobblestone","result":{"id":"minecraft:cobblestone_slab"}}"###),
+            (
+                "a",
+                r###"{"type":"minecraft:smelting","ingredient":"minecraft:cobblestone","result":{"id":"minecraft:stone"}}"###,
+            ),
+            (
+                "b",
+                r###"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:cobblestone"],"result":{"id":"minecraft:stone_button"}}"###,
+            ),
+            (
+                "c",
+                r###"{"type":"minecraft:stonecutting","ingredient":"minecraft:cobblestone","result":{"id":"minecraft:cobblestone_slab"}}"###,
+            ),
         ] {
             std::fs::write(recipes.join(format!("{name}.json")), json).unwrap();
         }
         let table = RecipeTable::load(&dir);
         let _ = std::fs::remove_dir_all(&dir);
-        let mut view = RecipeView::new(&table, Query::Uses("minecraft:cobblestone".into())).unwrap();
+        let mut view =
+            RecipeView::new(&table, Query::Uses("minecraft:cobblestone".into())).unwrap();
         let order: Vec<Category> = view.groups.iter().map(|g| g.0).collect();
         assert_eq!(
             order,
-            vec![Category::Crafting, Category::Smelting, Category::Stonecutting]
+            vec![
+                Category::Crafting,
+                Category::Smelting,
+                Category::Stonecutting
+            ]
         );
         view.step_category(false);
         assert_eq!(view.category(), Category::Stonecutting);
@@ -626,7 +732,8 @@ mod tests {
             id: "minecraft:stone_bricks".into(),
             mod_name: "Minecraft".into(),
             tooltip: "Stone Bricks
-Building".into(),
+Building"
+                .into(),
             tags: vec!["minecraft:stone_bricks".into(), "c:building".into()],
         };
         let create = Haystack {
@@ -652,7 +759,15 @@ Building".into(),
         assert!(hit("brick|casing", &stone));
         assert!(hit("brick|casing", &create));
         assert!(!hit("brick casing", &stone));
-        assert!(hit("@minecraft -brick", &Haystack { name: "Dirt".into(), id: "minecraft:dirt".into(), mod_name: "Minecraft".into(), ..Haystack::default() }));
+        assert!(hit(
+            "@minecraft -brick",
+            &Haystack {
+                name: "Dirt".into(),
+                id: "minecraft:dirt".into(),
+                mod_name: "Minecraft".into(),
+                ..Haystack::default()
+            }
+        ));
         // Quotes keep a phrase together.
         assert!(hit("\"stone bricks\"", &stone));
         assert!(!hit("\"bricks stone\"", &stone));
@@ -706,8 +821,14 @@ Building".into(),
         let dir = table_dir.join("data/minecraft/recipe");
         std::fs::create_dir_all(&dir).unwrap();
         for (name, json) in [
-            ("a", r###"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:oak_planks"],"result":{"id":"minecraft:stick"}}"###),
-            ("b", r###"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:bamboo"],"result":{"id":"minecraft:stick"}}"###),
+            (
+                "a",
+                r###"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:oak_planks"],"result":{"id":"minecraft:stick"}}"###,
+            ),
+            (
+                "b",
+                r###"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:bamboo"],"result":{"id":"minecraft:stick"}}"###,
+            ),
         ] {
             std::fs::write(dir.join(format!("{name}.json")), json).unwrap();
         }
@@ -727,9 +848,6 @@ Building".into(),
         assert_eq!(view.page, 1);
         assert_eq!(view.page_recipes(2).len(), 2);
         assert!(RecipeView::new(&table, Query::Uses("minecraft:diamond".into())).is_none());
-        assert_eq!(
-            Query::Output("x".into()).flipped(),
-            Query::Uses("x".into())
-        );
+        assert_eq!(Query::Output("x".into()).flipped(), Query::Uses("x".into()));
     }
 }

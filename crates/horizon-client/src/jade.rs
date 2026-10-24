@@ -120,7 +120,10 @@ pub fn details(block: &str, props: &[(String, String)]) -> Vec<Line> {
                 lines.push(Line::new(format!("Note: {note}"), YELLOW));
             }
             if let Some(instrument) = property(props, "instrument") {
-                lines.push(Line::new(format!("Instrument: {}", title_case(instrument)), GRAY));
+                lines.push(Line::new(
+                    format!("Instrument: {}", title_case(instrument)),
+                    GRAY,
+                ));
             }
         }
         "composter" => {
@@ -161,7 +164,10 @@ pub fn harvest(tool: Option<&str>, requires_tool: bool, can_harvest: bool) -> Op
             GREEN,
         )),
         (tool, true, false) => Some(Line::new(
-            format!("Needs a {}", tool.unwrap_or_else(|| "tool".into()).to_lowercase()),
+            format!(
+                "Needs a {}",
+                tool.unwrap_or_else(|| "tool".into()).to_lowercase()
+            ),
             RED,
         )),
     }
@@ -244,10 +250,7 @@ impl IconRow {
     pub fn size(&self, text_width: &dyn Fn(&str) -> f32) -> (f32, f32) {
         match &self.text {
             Some(t) => (text_width(t) + 10.0, 9.0),
-            None => (
-                (8 * self.per_line + 1) as f32,
-                (5 + 4 * self.lines) as f32,
-            ),
+            None => ((8 * self.per_line + 1) as f32, (5 + 4 * self.lines) as f32),
         }
     }
     /// The icons of a row, back to front (`HealthElement.extractRenderState`):
@@ -311,7 +314,10 @@ mod tests {
         let (id, p) = split_state("minecraft:oak_stairs[facing=north,half=bottom]");
         assert_eq!(id, "minecraft:oak_stairs");
         assert_eq!(p, props(&[("facing", "north"), ("half", "bottom")]));
-        assert_eq!(split_state("minecraft:stone"), ("minecraft:stone".into(), vec![]));
+        assert_eq!(
+            split_state("minecraft:stone"),
+            ("minecraft:stone".into(), vec![])
+        );
     }
 
     #[test]
@@ -354,7 +360,10 @@ mod tests {
             "Best tool: Pickaxe"
         );
         let good = harvest(Some("pickaxe"), true, true).unwrap();
-        assert_eq!((good.text.as_str(), good.color), ("Can harvest (Pickaxe)", GREEN));
+        assert_eq!(
+            (good.text.as_str(), good.color),
+            ("Can harvest (Pickaxe)", GREEN)
+        );
         let bad = harvest(Some("pickaxe"), true, false).unwrap();
         assert_eq!((bad.text.as_str(), bad.color), ("Needs a pickaxe", RED));
     }

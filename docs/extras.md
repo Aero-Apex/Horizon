@@ -235,15 +235,26 @@ under the crosshair.
 - Mobs: their health as hearts (up to ten, scaled for bigger pools).
 - Blocks: crop growth, redstone power, repeater delay, comparator mode, note
   block note and instrument, composter, honey and cauldron levels, farmland
-  moisture; `Unbreakable` for bedrock; which tool breaks it best and whether the
-  held item can harvest it (`Items::correct_for_drops`).
+  moisture; a furnace's items with its cooking arrow, a brewing stand's fuel and
+  brew time, a jukebox's record, a lectern's book, a beehive's honey and bees, a
+  command block's command (game masters only), unstable TNT, and a spawner's
+  title with the mob it spawns (`Spawner (Zombie)`); `Unbreakable` for bedrock;
+  which tool breaks it best and whether the held item can harvest it
+  (`Items::correct_for_drops`).
+- Mobs also show breeding (`In Love`, or the cooldown after breeding) and their
+  potion effects with the level and the time left (up to three).
+- Not done: a tamed mob's owner, a baby's time to grow up, villager and horse
+  details, item frames, paintings, falling blocks, the trial spawner's cooldown,
+  a hopper's lock, waxed signs, enchanting power, player heads, and the display
+  entities' lines (Horizon has no display entities yet).
 - A mob's health is Jade's `HealthElement`: hearts, 4 pixels between rows when
   there are more than ten, and only above 40 half-hearts one heart and the number
   (`20/20` style, no fractions). A mob with armor gets Jade's armor row the same
   way. The box is Jade's default dark one (70% opacity), its text colours the
   default palette.
 - A green bar under the box shows how far the block being dug has got.
-- Logic and tests: `jade.rs`; the game side `game/jade.rs`.
+- Logic and tests: `jade.rs` and `jade_vanilla.rs` (the vanilla providers' lines);
+  the game side `game/jade.rs`.
 
 ### JEI (`jei`, default off)
 A rewrite of the Java mod: on the inventory, container and creative screens, an
@@ -261,6 +272,13 @@ item list beside the menu and a recipe window.
   frame. Shaped recipes keep their grid, shapeless ones fill it in order,
   ingredient tags cycle through their items each second, and items in the
   window can be clicked too.
+- Fuel: every item with a burn time is a fuel in the Smelting, Smoking or Blasting
+  Fuel category, its flame beside it and `Smelts N items` (burn time and smelt
+  count from the item's `cooking_fuel` data; the smoker and blast furnace take
+  the fast providers, as the furnace tick does). Not done: composting (Horizon's
+  composter reads the layers provider, not the chance JEI shows), brewing, anvil
+  and grindstone (the last two need ItemStack outputs, which recipes do not
+  carry yet). The fuel window shows the item's own fuel, as JEI's Uses view does.
 - The `+` beside a recipe puts its ingredients in the inventory in creative
   mode (survival says it needs creative).
 - The list has no slot boxes, a lit square under the pointer, page arrows, the
@@ -284,9 +302,11 @@ walls... The methods `ctm`, `horizontal`, `vertical`, `horizontal+vertical`,
 `vertical+horizontal`, `top`, `random`, `repeat` and `fixed` work, with
 `matchBlocks` (block ids and property values) and `matchTiles` (sprites),
 `connect=block|tile|state`, `innerSeams`, `faces`, `heights`, `orient`,
-`symmetry`, `weights`, `linked` and `prioritize`. Not done: the overlay
-methods, `ctm_compact`, `biomes` and `name` filters (those rules are logged and
-skipped). The tiles are extra layers of the block sprite array, so a connected
+`symmetry`, `weights`, `linked` and `prioritize`. Not done: the overlay family
+(Continuity's `overlay*` methods, which draw an extra layer over a face with a
+tint and a cutout or translucent layer; they need a second quad per face in the
+mesher and the edge and corner rule), `ctm_compact`, `biomes` and `name` filters
+(those rules are logged and skipped). The tiles are extra layers of the block sprite array, so a connected
 face costs nothing more to draw. Logic and tests: `ctm.rs`; the mesher asks it
 for each face's layer.
 

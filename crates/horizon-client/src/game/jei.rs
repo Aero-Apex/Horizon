@@ -324,9 +324,32 @@ impl Game<'_> {
             self.jei.page = 0;
         }
         if self.jei.table.is_none() {
-            let table = RecipeTable::load(&self.ui.vanilla_root);
+            let mut table = RecipeTable::load(&self.ui.vanilla_root);
+            self.jei_fuel_recipes(&mut table);
             log::info!("Horizon: {} recipes for the item list", table.len());
             self.jei.table = Some(Arc::new(table));
+        }
+    }
+
+    /// `FuelRecipeMaker`: every item with a burn time is a fuel in the category of
+    /// each furnace that burns it. The smoker and the blast furnace take the fast
+    /// providers, as the furnace tick does.
+    fn jei_fuel_recipes(&self, table: &mut RecipeTable) {
+        let items = self.res.items();
+        let providers = self.res.providers();
+        for (kind, station, fast) in [
+            ("minecraft:fuel_smelting", "minecraft:furnace", false),
+            ("minecraft:fuel_smoking", "minecraft:smoker", true),
+            ("minecraft:fuel_blasting", "minecraft:blast_furnace", true),
+        ] {
+            for id in items.items.keys() {
+                let stack = ItemStack::new(id, 1);
+                let burn = providers.burn_time(items, &stack, fast);
+                if burn > 0 {
+                    let smelt = providers.speed(items, &stack, fast);
+                    table.add_fuel(kind, station, id, burn, smelt);
+                }
+            }
         }
     }
 
@@ -856,7 +879,7 @@ impl Game<'_> {
             }
         }
         // The tab icons.
-        for (i, (group, _)) in view.groups.iter().enumerate().map(|(i, g)| (i, g)) {
+        for (i, (group, _)) in view.groups.iter().enumerate() {
             let tab = self.jei.tabs[i];
             let icon = ItemStack::new(group.station(), 1);
             let lift = if i == selected { 5.0 } else { 7.0 };
@@ -899,8 +922,10 @@ impl Game<'_> {
                 for &(dx, dy, _) in &layout.inputs {
                     slot_box(batch, atlas, ox + dx, oy + dy);
                 }
-                slot_box(batch, atlas, ox + layout.output.0, oy + layout.output.1);
-                arrow(batch, atlas, ox + layout.arrow.0, oy + layout.arrow.1);
+                if !recipe.result.is_empty() {
+                    slot_box(batch, atlas, ox + layout.output.0, oy + layout.output.1);
+                    arrow(batch, atlas, ox + layout.arrow.0, oy + layout.arrow.1);
+                }
             }
             if let Some((flx, fly)) = layout.flame {
                 let draws = [sprite(
@@ -910,6 +935,20 @@ impl Game<'_> {
                     14,
                 )];
                 hud_layout::paint(batch, &self.gui.atlas, &draws);
+            }
+            if let Some((nx, ny)) = layout.note {
+                let text = logic::smelt_count_text(recipe.smelt_count);
+                let atlas = &self.gui.atlas;
+                let tw = HudBatch::text_width(atlas, &text);
+                let (aw, ah) = (layout.size.0 - nx, layout.size.1 - ny);
+                batch.text(
+                    atlas,
+                    &text,
+                    ox + nx + ((aw - tw) / 2.0).round(),
+                    oy + ny + ((ah - 8.0) / 2.0).round(),
+                    0xFF80_8080,
+                    false,
+                );
             }
             // Items: the inputs (cycling through a tag's items) and the result.
             let mut needs: Vec<(String, u32)> = Vec::new();
@@ -931,10 +970,12 @@ impl Game<'_> {
                     }
                 }
             }
-            let result = ItemStack::new(&recipe.result, recipe.result_count);
-            let (rx, ry) = (ox + layout.output.0 + 1.0, oy + layout.output.1 + 1.0);
-            self.draw_item(batch, &result, rx, ry);
-            self.jei.hits.push((rx, ry, recipe.result.clone()));
+            if !recipe.result.is_empty() {
+                let result = ItemStack::new(&recipe.result, recipe.result_count);
+                let (rx, ry) = (ox + layout.output.0 + 1.0, oy + layout.output.1 + 1.0);
+                self.draw_item(batch, &result, rx, ry);
+                self.jei.hits.push((rx, ry, recipe.result.clone()));
+            }
             // The plus: adds the recipe's items.
             let plus = [fx + fw - 15.0, fy + fh - 15.0, 12.0, 12.0];
             button(batch, &self.gui.atlas, plus, "+", inside(cursor, plus));
