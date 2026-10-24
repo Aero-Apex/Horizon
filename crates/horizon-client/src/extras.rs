@@ -116,6 +116,10 @@ pub struct Extras {
     pub appleskin_health: bool,
     /// Hunger and saturation values in food tooltips.
     pub appleskin_tooltips: bool,
+    /// Food values show without holding Shift (`showFoodValuesInTooltipAlways`).
+    pub appleskin_tooltips_always: bool,
+    /// The overlays work for food in the off hand too (`showFoodValuesHudOverlayWhenOffhand`).
+    pub appleskin_offhand: bool,
     /// The food numbers on F3.
     pub appleskin_debug: bool,
     /// Jade: a box at the top of the screen for the block or mob under the
@@ -172,6 +176,8 @@ impl Default for Extras {
             appleskin_exhaustion: true,
             appleskin_health: true,
             appleskin_tooltips: true,
+            appleskin_tooltips_always: true,
+            appleskin_offhand: true,
             appleskin_debug: true,
             jade: false,
             jade_harvest: true,
@@ -249,6 +255,10 @@ impl Extras {
                 "appleSkinExhaustion" => e.appleskin_exhaustion = flag(e.appleskin_exhaustion),
                 "appleSkinHealth" => e.appleskin_health = flag(e.appleskin_health),
                 "appleSkinTooltips" => e.appleskin_tooltips = flag(e.appleskin_tooltips),
+                "appleSkinTooltipsAlways" => {
+                    e.appleskin_tooltips_always = flag(e.appleskin_tooltips_always)
+                }
+                "appleSkinOffhand" => e.appleskin_offhand = flag(e.appleskin_offhand),
                 "appleSkinDebug" => e.appleskin_debug = flag(e.appleskin_debug),
                 "jade" => e.jade = flag(e.jade),
                 "jadeHarvest" => e.jade_harvest = flag(e.jade_harvest),
@@ -266,7 +276,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nappleSkin:{}\nappleSkinRestored:{}\nappleSkinSaturation:{}\nappleSkinExhaustion:{}\nappleSkinHealth:{}\nappleSkinTooltips:{}\nappleSkinDebug:{}\njade:{}\njadeHarvest:{}\njadeDetails:{}\njei:{}\ncontrolling:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\n",
+            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nappleSkin:{}\nappleSkinRestored:{}\nappleSkinSaturation:{}\nappleSkinExhaustion:{}\nappleSkinHealth:{}\nappleSkinTooltips:{}\nappleSkinTooltipsAlways:{}\nappleSkinOffhand:{}\nappleSkinDebug:{}\njade:{}\njadeHarvest:{}\njadeDetails:{}\njei:{}\ncontrolling:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\n",
             bool_text(self.fullbright),
             bool_text(self.dynamic_lights),
             bool_text(self.zoom),
@@ -299,6 +309,8 @@ impl Extras {
             bool_text(self.appleskin_exhaustion),
             bool_text(self.appleskin_health),
             bool_text(self.appleskin_tooltips),
+            bool_text(self.appleskin_tooltips_always),
+            bool_text(self.appleskin_offhand),
             bool_text(self.appleskin_debug),
             bool_text(self.jade),
             bool_text(self.jade_harvest),
@@ -531,6 +543,8 @@ pub enum Item {
     AppleSkinExhaustion,
     AppleSkinHealth,
     AppleSkinTooltips,
+    AppleSkinTooltipsAlways,
+    AppleSkinOffhand,
     AppleSkinDebug,
     Jade,
     JadeHarvest,
@@ -578,6 +592,8 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(AppleSkinExhaustion),
         Ok(AppleSkinHealth),
         Ok(AppleSkinTooltips),
+        Ok(AppleSkinTooltipsAlways),
+        Ok(AppleSkinOffhand),
         Ok(AppleSkinDebug),
         Err("Jade"),
         Ok(Jade),
@@ -637,6 +653,8 @@ impl Item {
             Item::AppleSkinExhaustion => "Exhaustion strip",
             Item::AppleSkinHealth => "Health preview",
             Item::AppleSkinTooltips => "Food values in tooltips",
+            Item::AppleSkinTooltipsAlways => "Tooltip values without Shift",
+            Item::AppleSkinOffhand => "Off-hand food",
             Item::AppleSkinDebug => "Food values on F3",
             Item::Jade => "Jade",
             Item::JadeHarvest => "Harvest info",
@@ -662,7 +680,9 @@ impl Item {
             KeystrokesCorner | KeystrokesCps => Keystrokes,
             MouseTweaksWheel => MouseTweaks,
             AppleSkinRestored | AppleSkinSaturation | AppleSkinExhaustion | AppleSkinHealth
-            | AppleSkinTooltips | AppleSkinDebug => AppleSkin,
+            | AppleSkinTooltips | AppleSkinTooltipsAlways | AppleSkinOffhand | AppleSkinDebug => {
+                AppleSkin
+            }
             JadeHarvest | JadeDetails => Jade,
             SortKey => Sort,
             Fullbright | DynamicLights | Zoom | Minimap | Fps | Keystrokes | MouseTweaks | Sort
@@ -715,7 +735,9 @@ impl Item {
             Item::AppleSkinHealth => {
                 "Holding food, the hearts natural regeneration would give flash on the health bar."
             }
-            Item::AppleSkinTooltips => "Food items list the hunger and saturation they give.",
+            Item::AppleSkinTooltips => "Food items show the hunger and saturation they give as icons.",
+            Item::AppleSkinTooltipsAlways => "Show them without holding Shift.",
+            Item::AppleSkinOffhand => "The previews also work for food in your off hand.",
             Item::AppleSkinDebug => "Hunger, saturation and exhaustion on the F3 screen.",
             Item::Jade => {
                 "A box at the top of the screen names the block or mob under your crosshair, with its icon, health and details. A rewrite of the Java mod."
@@ -785,6 +807,8 @@ impl Item {
             Item::AppleSkinExhaustion => e.appleskin_exhaustion,
             Item::AppleSkinHealth => e.appleskin_health,
             Item::AppleSkinTooltips => e.appleskin_tooltips,
+            Item::AppleSkinTooltipsAlways => e.appleskin_tooltips_always,
+            Item::AppleSkinOffhand => e.appleskin_offhand,
             Item::AppleSkinDebug => e.appleskin_debug,
             Item::Jade => e.jade,
             Item::JadeHarvest => e.jade_harvest,
@@ -847,6 +871,10 @@ impl Item {
             Item::AppleSkinExhaustion => e.appleskin_exhaustion = !e.appleskin_exhaustion,
             Item::AppleSkinHealth => e.appleskin_health = !e.appleskin_health,
             Item::AppleSkinTooltips => e.appleskin_tooltips = !e.appleskin_tooltips,
+            Item::AppleSkinTooltipsAlways => {
+                e.appleskin_tooltips_always = !e.appleskin_tooltips_always
+            }
+            Item::AppleSkinOffhand => e.appleskin_offhand = !e.appleskin_offhand,
             Item::AppleSkinDebug => e.appleskin_debug = !e.appleskin_debug,
             Item::Jade => e.jade = !e.jade,
             Item::JadeHarvest => e.jade_harvest = !e.jade_harvest,

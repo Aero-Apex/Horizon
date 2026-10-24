@@ -425,6 +425,21 @@ impl HudAtlas {
         }
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
         if full {
+            // AppleSkin's own icons (public domain; `assets/appleskin`).
+            for (name, png) in [
+                (
+                    crate::appleskin::ICONS,
+                    &include_bytes!("../assets/appleskin/icons.png")[..],
+                ),
+                (
+                    crate::appleskin::OUTLINE,
+                    &include_bytes!("../assets/appleskin/tooltip_hunger_outline.png")[..],
+                ),
+            ] {
+                if let Ok((w, h, pixels)) = decode_bytes(png) {
+                    images.push((name.into(), w, h, pixels));
+                }
+            }
             Self::slots(&mut images, crate::trims::slot_size(root));
         }
         // Blurred sprites are sampled linearly in the atlas (screen.wgsl): a

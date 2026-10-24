@@ -484,6 +484,8 @@ pub enum HeartKind {
 pub struct BarPositions {
     /// Food icons, 0 = the rightmost; empty while a mount's hearts replace the bar.
     pub food: Vec<(i32, i32)>,
+    /// The food bar's right edge and top, without the jitter.
+    pub food_base: (i32, i32),
     /// Heart containers, 0 = the leftmost.
     pub hearts: Vec<(i32, i32)>,
 }
@@ -788,6 +790,7 @@ impl HealthHud {
         }
         self.bars = BarPositions {
             food: food_row,
+            food_base: (x_right, y_base),
             hearts,
         };
         out

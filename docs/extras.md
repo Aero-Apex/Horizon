@@ -157,27 +157,32 @@ and the container screen tests are unchanged).
   engine on random chests.
 
 ### AppleSkin (`appleSkin`, default off)
-A rewrite of the Java mod (public domain) for this client's own HUD. Sub-switches
-(all on with the extra): `appleSkinRestored`, `appleSkinSaturation`,
-`appleSkinExhaustion`, `appleSkinHealth`, `appleSkinTooltips`, `appleSkinDebug`.
-- **Saturation**: a golden outline on each food icon, filled from the bottom in
-  quarters as saturation covers the icon (10 icons, saturation / 2 each).
-- **Exhaustion**: a pale strip under the food icons growing from the right end
-  as exhaustion builds to 4 (the point where a unit of saturation or hunger goes).
-- **Food in hand** (only when the player could eat it, `Player.canEat`): the
-  hunger it would restore flashes on the food bar (vanilla's own food sprites at
-  a pulsing alpha, `sin(tick * 0.1)`, at most 0.65), the saturation it would add
-  flashes as outlines, and the hearts natural regeneration would then give flash
-  on the health bar.
-- The heart estimate runs vanilla's `FoodData.tick` forward on a stand-in world
-  (health, difficulty, the natural regeneration rule), so it follows vanilla's
-  rules exactly; it reruns only when the food state or health changes.
+A port of squeek502's AppleSkin (public domain), drawn on this client's own HUD
+with the mod's own `icons.png`. Sub-switches (all on with the extra):
+`appleSkinRestored`, `appleSkinSaturation`, `appleSkinExhaustion`,
+`appleSkinHealth`, `appleSkinTooltips`, `appleSkinTooltipsAlways`,
+`appleSkinOffhand`, `appleSkinDebug`.
+- **Saturation**: golden icons from the sheet over the food icons, in the mod's
+  four sizes (full, three quarters, a half, a quarter).
+- **Exhaustion**: the sheet's strip behind the food bar, growing from the right
+  as exhaustion builds to 4, 75% opaque.
+- **Food in hand** (main hand, else the off hand; only food the player could
+  eat, `Player.canEat`): the hunger it restores flashes over a faint empty
+  icon (green icons for food with a harmful effect), the saturation it adds
+  flashes as golden icons, and the hearts it would heal flash over the health
+  bar. The pulse is the mod's: a triangle wave stepping 1/8 a client tick
+  between -0.5 and 1.5, clamped, at most 0.65, restarting when no food is held.
+- **Health estimate** is the mod's `getEstimatedHealthIncrement`: natural
+  regeneration from the food after eating (fast regeneration in one step) plus
+  the heal of a Regeneration the food applies. It is not shown in Peaceful, at
+  18 food or more, or while poisoned, withered or regenerating.
 - Everything sits on the icons `HealthHud::layout` drew that frame
-  (`BarPositions`), so food jitter, the regeneration wobble and extra heart rows
-  are followed. Mounted, the food bar is replaced by the mount's hearts and
-  nothing is drawn.
-- **Tooltips**: food items list `Hunger: +N` and `Saturation: +S`, and what the
-  bar cannot hold. **F3**: `hunger, saturation, exhaustion`.
+  (`BarPositions`), so food jitter and extra heart rows are followed. Mounted,
+  the food bar is replaced by the mount's hearts and no food overlay is drawn.
+- **Tooltips**: food items get the mod's row of hunger icons over saturation
+  icons (outlined when a value differs from the default, `x12` past ten),
+  without Shift unless `appleSkinTooltipsAlways` is off. **F3**: the line
+  `hunger: 20, sat: 5, exh: 1.23/4`.
 - Logic and tests: `appleskin.rs`; the game side `game/appleskin.rs`.
 
 ### Jade (`jade`, default off; `jadeHarvest` and `jadeDetails`, on)
@@ -191,14 +196,20 @@ under the crosshair.
   block note and instrument, composter, honey and cauldron levels, farmland
   moisture; `Unbreakable` for bedrock; which tool breaks it best and whether the
   held item can harvest it (`Items::correct_for_drops`).
+- A mob's health is Jade's `HealthElement`: hearts, 4 pixels between rows when
+  there are more than ten, and only above 40 half-hearts one heart and the number
+  (`20/20` style, no fractions). A mob with armor gets Jade's armor row the same
+  way. The box is Jade's default dark one (70% opacity), its text colours the
+  default palette.
 - A green bar under the box shows how far the block being dug has got.
 - Logic and tests: `jade.rs`; the game side `game/jade.rs`.
 
 ### JEI (`jei`, default off)
 A rewrite of the Java mod: on the inventory, container and creative screens, an
 item list beside the menu and a recipe window.
-- The list is every creative item, paged, searched by the box under it with the
-  creative screen's own search (item names, `#tag`).
+- The list is every creative item, paged, searched by the box under it as JEI
+  does: words in the name; `@mod`, `#tooltip`, `$tag` and `&id` prefixes; `-` to
+  leave out, `|` for either, quotes for phrases.
 - Click an item for how it is made, right-click for what uses it; R and U do the
   same over any item (the list, the window, the menu's own slots); Backspace goes
   back; Escape leaves the search box, then closes the window; the wheel turns
@@ -217,9 +228,13 @@ item list beside the menu and a recipe window.
 - Logic and tests: `jei.rs`; the game side `game/jei.rs`.
 
 ### Controlling (`controlling`, default off)
-A rewrite of the Java mod for the Key Binds page: the search also matches the
-key's name (`shift`, `R`) and the category, and a button next to the search box
-cycles Show: All, Conflicts, Unbound, Changed.
+A port of Jaredlll08's Controlling (MIT) and its Searchables search, for the
+Key Binds page: a wide search box (`name`, `category:` and `key:` terms, quotes
+for phrases), footer buttons Toggle Free (every key no binding uses, with its
+GLFW value), Sort (None, A->Z, Z->A, Key A->Z, Key Z->A), Show Unbound and Show
+Conflicts (each toggles back to Show All), and Reset All that asks to
+`Confirm?` first. A search or filter shows a flat list; otherwise the
+categories. Logic and tests: `controlling.rs`; the page in `options_ui.rs`.
 
 ### Connected textures (a resource pack feature, always on)
 Resource packs in the OptiFine `optifine/ctm` format (what Continuity reads)

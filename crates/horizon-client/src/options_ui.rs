@@ -882,8 +882,6 @@ pub enum Page {
     /// AI Agent: agent control on or off, whether an agent is connected, the connection details.
     Agent,
 }
-/// Controlling's Key Binds filters, in the order its button cycles them.
-const KEY_FILTERS: [&str; 4] = ["All", "Conflicts", "Unbound", "Changed"];
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
     None,
@@ -891,8 +889,13 @@ enum Act {
     Done,
     Cycle(Opt),
     Extra(crate::extras::Item),
-    /// Controlling: the Key Binds list's next filter.
-    KeyFilter,
+    /// Controlling's Key Binds buttons: Toggle Free, Sort, Show Unbound,
+    /// Show Conflicts, and Reset All with its confirmation.
+    KeyFree,
+    KeySort,
+    KeyUnbound,
+    KeyConflicts,
+    KeyResetAll,
     Key(&'static str),
     ResetKey(&'static str),
     ResetKeys,
@@ -1014,7 +1017,10 @@ pub struct OptionsUi {
     pub(crate) settings_search: ui::EditBox,
     /// Controlling's Key Binds filter: all, conflicts, unbound or changed
     /// keys (`KEY_FILTERS`).
-    key_filter: usize,
+    key_mode: crate::controlling::Mode,
+    key_sort: crate::controlling::Sort,
+    key_free: bool,
+    key_confirm: bool,
     /// Packs: the packs found and the selection the screen opens with.
     pub pack_infos: Vec<crate::pack_screen::PackInfo>,
     pub pack_selection: Vec<String>,
@@ -1061,7 +1067,10 @@ impl Default for OptionsUi {
             language_choice: None,
             language_search: search,
             settings_search,
-            key_filter: 0,
+            key_mode: Default::default(),
+            key_sort: Default::default(),
+            key_free: false,
+            key_confirm: false,
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
@@ -1191,7 +1200,10 @@ impl OptionsUi {
         if matches!(page, Page::Video | Page::Controls | Page::KeyBinds) {
             self.settings_search.set_value("");
             self.settings_search.focused = false;
-            self.key_filter = 0;
+            self.key_mode = Default::default();
+            self.key_sort = Default::default();
+            self.key_free = false;
+            self.key_confirm = false;
         }
         if page == Page::Language {
             self.language_choice = None;
@@ -1798,8 +1810,11 @@ impl OptionsUi {
         }
         let cx = (w / 2.0).floor();
         if matches!(page, Page::Video | Page::Controls | Page::KeyBinds) {
-            self.settings_search.x = cx - 100.0;
-            self.settings_search.y = 17.0;
+            // Controlling's search box spans the list (340 wide) under the title.
+            let wide = page == Page::KeyBinds && s.extras.controlling;
+            self.settings_search.width = if wide { 340.0 } else { 200.0 };
+            self.settings_search.x = cx - self.settings_search.width / 2.0;
+            self.settings_search.y = if wide { 20.0 } else { 17.0 };
         }
         let done = |y: f32| button(cx - 100.0, y, 200.0, tr("gui.done"), Act::Done);
         // (list top, list bottom, content height)
@@ -1895,10 +1910,16 @@ impl OptionsUi {
                 bottom = 0.0;
             }
             Page::KeyBinds => {
-                top = 38.0;
+                // Controlling's screen has a taller header (title, then a wide
+                // search box) and footer (two rows of buttons).
+                let controlling = s.extras.controlling;
+                top = if controlling { 48.0 } else { 38.0 };
+                if controlling {
+                    bottom = h - 56.0;
+                }
                 out.push(Widget {
                     x: 0.0,
-                    y: 4.0,
+                    y: if controlling { 8.0 } else { 4.0 },
                     w,
                     h: 9.0,
                     kind: WKind::Text {
@@ -1908,59 +1929,125 @@ impl OptionsUi {
                     },
                     list: false,
                 });
+                let query_raw = self.settings_search.value.clone();
+                let query = query_raw.to_lowercase();
+                let name_of = |n: &str| lang::get(n);
+                let category_of = |c: &str| lang::get(&format!("key.category.minecraft.{c}"));
+                let key_text = |n: &str| keybinds::display_name(s.keys.get(n)).plain();
+                let bound = |n: &str| s.keys.get(n) != "key.keyboard.unknown";
                 let mut mappings: Vec<(&str, &str)> =
                     MAPPINGS.iter().map(|(n, _, c)| (*n, *c)).collect();
-                let query = self.settings_search.value.to_lowercase();
-                // Controlling: the search also finds keys and categories, and
-                // a button keeps only conflicts, unbound or changed keys.
-                let controlling = s.extras.controlling;
+                // The list's kind: plain with headers, or filtered and flat.
+                let flat = controlling
+                    && !crate::controlling::is_plain(&query_raw, self.key_mode, self.key_sort);
                 if controlling {
-                    out.push(Widget {
-                        x: cx + 104.0,
-                        y: 17.0,
-                        w: 96.0,
-                        h: 15.0,
-                        kind: WKind::Button {
-                            label: Text::literal(format!("Show: {}", KEY_FILTERS[self.key_filter])),
-                            active: true,
-                            act: Act::KeyFilter,
-                        },
-                        list: false,
+                    let terms = crate::controlling::parse(&query_raw);
+                    let mode = self.key_mode;
+                    let sort = self.key_sort;
+                    mappings.retain(|(name, category)| {
+                        let entry = crate::controlling::Entry {
+                            name: name_of(name),
+                            category: category_of(category),
+                            key: bound(name).then(|| key_text(name)),
+                        };
+                        let shown = match mode {
+                            crate::controlling::Mode::All => true,
+                            crate::controlling::Mode::Unbound => !bound(name),
+                            crate::controlling::Mode::Conflicting => {
+                                bound(name)
+                                    && MAPPINGS
+                                        .iter()
+                                        .any(|(n, _, _)| n != name && s.keys.get(n) == s.keys.get(name))
+                            }
+                        };
+                        shown && crate::controlling::matches(&terms, &entry)
+                    });
+                    // The list's own order is by category, then by name; a
+                    // sort applies to the whole list.
+                    mappings.sort_by(|a, b| {
+                        let ca = CATEGORIES.iter().position(|c| *c == a.1).unwrap_or(99);
+                        let cb = CATEGORIES.iter().position(|c| *c == b.1).unwrap_or(99);
+                        ca.cmp(&cb).then_with(|| name_of(a.0).cmp(&name_of(b.0)))
+                    });
+                    if sort != crate::controlling::Sort::None {
+                        mappings.sort_by(|a, b| {
+                            sort.compare(
+                                (&name_of(a.0), &key_text(a.0)),
+                                (&name_of(b.0), &key_text(b.0)),
+                            )
+                        });
+                    }
+                } else {
+                    mappings.retain(|(name, _)| {
+                        query.is_empty() || name_of(name).to_lowercase().contains(&query)
+                    });
+                    mappings.sort_by(|a, b| {
+                        let ca = CATEGORIES.iter().position(|c| *c == a.1).unwrap_or(99);
+                        let cb = CATEGORIES.iter().position(|c| *c == b.1).unwrap_or(99);
+                        ca.cmp(&cb).then_with(|| name_of(a.0).cmp(&name_of(b.0)))
                     });
                 }
-                let filter = if controlling { self.key_filter } else { 0 };
-                mappings.retain(|(name, category)| {
-                    let by_name = query.is_empty() || lang::get(name).to_lowercase().contains(&query);
-                    let by_key = controlling
-                        && !query.is_empty()
-                        && (keybinds::display_name(s.keys.get(name))
-                            .plain()
-                            .to_lowercase()
-                            .contains(&query)
-                            || lang::get(&format!("key.category.minecraft.{category}"))
-                                .to_lowercase()
-                                .contains(&query));
-                    let shown = match filter {
-                        1 => !s.keys.conflicts(name).is_empty(),
-                        2 => s.keys.get(name) == "key.keyboard.unknown",
-                        3 => !s.keys.is_default(name),
-                        _ => true,
-                    };
-                    (by_name || by_key) && shown
-                });
-                mappings.sort_by(|a, b| {
-                    let ca = CATEGORIES.iter().position(|c| *c == a.1).unwrap_or(99);
-                    let cb = CATEGORIES.iter().position(|c| *c == b.1).unwrap_or(99);
-                    ca.cmp(&cb)
-                        .then_with(|| lang::get(a.0).cmp(&lang::get(b.0)))
-                });
                 let row_left = cx - 170.0;
                 let scrollbar_x = row_left + 340.0 + 6.0 + 2.0;
                 let list_start = out.len();
                 let mut y = top + 2.0 - self.scroll;
+                if controlling && self.key_free {
+                    // `FreeKeysList`: every input no binding uses.
+                    y += 0.0;
+                    out.push(Widget {
+                        x: 0.0,
+                        y: y + 7.0,
+                        w,
+                        h: 9.0,
+                        kind: WKind::Text {
+                            text: Text::literal("Available Keys"),
+                            color: u32::MAX,
+                            centered: true,
+                        },
+                        list: false,
+                    });
+                    y += 20.0;
+                    let terms = crate::controlling::parse(&query_raw);
+                    let used: Vec<&str> = MAPPINGS.iter().map(|(n, _, _)| s.keys.get(n)).collect();
+                    let mut free: Vec<String> = keybinds::all_input_names()
+                        .into_iter()
+                        .filter(|n| !used.contains(&n.as_str()))
+                        .collect();
+                    free.sort_by(|a, b| {
+                        keybinds::display_name(a)
+                            .plain()
+                            .encode_utf16()
+                            .cmp(keybinds::display_name(b).plain().encode_utf16())
+                    });
+                    for name in free {
+                        let entry = crate::controlling::Entry {
+                            name: name.clone(),
+                            category: String::new(),
+                            key: None,
+                        };
+                        if !crate::controlling::matches(&terms, &entry) {
+                            continue;
+                        }
+                        let value = crate::controlling::input_value(&name).unwrap_or(-1);
+                        out.push(Widget {
+                            x: row_left + 2.0,
+                            y: y + 6.0,
+                            w: 300.0,
+                            h: 9.0,
+                            kind: WKind::Text {
+                                text: Text::literal(format!("{name} - {value}")),
+                                color: u32::MAX,
+                                centered: false,
+                            },
+                            list: false,
+                        });
+                        y += 20.0;
+                    }
+                    mappings = Vec::new();
+                }
                 let mut last_category = "";
                 for (name, category) in mappings {
-                    if category != last_category {
+                    if category != last_category && !flat {
                         last_category = category;
                         let label =
                             Text::translate(&format!("key.category.minecraft.{category}"), &[])
@@ -2048,14 +2135,62 @@ impl OptionsUi {
                 }
                 content = y + self.scroll - top + 2.0;
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
-                out.push(button(
-                    cx - 154.0,
-                    h - 27.0,
-                    150.0,
-                    tr("controls.resetAll"),
-                    Act::ResetKeys,
-                ));
-                out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
+                if controlling {
+                    // Two rows: Toggle Free, Sort, Show Unbound and Show
+                    // Conflicts; then Reset All (twice to confirm) and Done.
+                    let free = self.key_free;
+                    let mode = self.key_mode;
+                    let small = |x: f32, label: String, act: Act| {
+                        let b = button(x, h - 52.0, 74.0, Text::literal(label), act);
+                        b
+                    };
+                    out.push(small(cx - 156.0, "Toggle Free".into(), Act::KeyFree));
+                    let sort = small(
+                        cx - 78.0,
+                        format!("Sort: {}", self.key_sort.label()),
+                        Act::KeySort,
+                    );
+                    out.push(if free { inactive(sort) } else { sort });
+                    let unbound = small(
+                        cx + 4.0,
+                        crate::controlling::show_none_label(mode).into(),
+                        Act::KeyUnbound,
+                    );
+                    out.push(if free { inactive(unbound) } else { unbound });
+                    let conflicting = small(
+                        cx + 82.0,
+                        crate::controlling::show_conflicts_label(mode).into(),
+                        Act::KeyConflicts,
+                    );
+                    out.push(if free { inactive(conflicting) } else { conflicting });
+                    let can_reset = MAPPINGS.iter().any(|(n, _, _)| !s.keys.is_default(n));
+                    let reset_all = button(
+                        cx - 155.0,
+                        h - 27.0,
+                        150.0,
+                        if self.key_confirm {
+                            Text::literal("Confirm?")
+                        } else {
+                            tr("controls.resetAll")
+                        },
+                        Act::KeyResetAll,
+                    );
+                    out.push(if can_reset && !free {
+                        reset_all
+                    } else {
+                        inactive(reset_all)
+                    });
+                    out.push(button(cx + 5.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
+                } else {
+                    out.push(button(
+                        cx - 154.0,
+                        h - 27.0,
+                        150.0,
+                        tr("controls.resetAll"),
+                        Act::ResetKeys,
+                    ));
+                    out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
+                }
             }
             Page::PadBinds => {
                 out.push(Widget {
@@ -2863,9 +2998,30 @@ impl OptionsUi {
                                 events.push(Event::Changed);
                             }
                         }
-                        Act::KeyFilter => {
-                            self.key_filter = (self.key_filter + 1) % KEY_FILTERS.len();
+                        Act::KeyFree => {
+                            self.key_free = !self.key_free;
+                            self.key_confirm = false;
                             self.scroll = 0.0;
+                        }
+                        Act::KeySort => {
+                            self.key_sort = self.key_sort.cycle();
+                            self.scroll = 0.0;
+                        }
+                        Act::KeyUnbound => {
+                            self.key_mode = crate::controlling::press_unbound(self.key_mode);
+                            self.scroll = 0.0;
+                        }
+                        Act::KeyConflicts => {
+                            self.key_mode = crate::controlling::press_conflicting(self.key_mode);
+                            self.scroll = 0.0;
+                        }
+                        Act::KeyResetAll => {
+                            // Pressed once it asks, pressed again it resets.
+                            if self.key_confirm {
+                                s.keys.reset_all();
+                                events.push(Event::Changed);
+                            }
+                            self.key_confirm = !self.key_confirm;
                         }
                         Act::Key(name) => self.selected_key = Some(name),
                         Act::ResetKey(name) => {

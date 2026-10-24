@@ -1243,8 +1243,8 @@ struct Game<'a> {
     fps_at: Instant,
     ticks: u64,
     health_hud: hud_layout::HealthHud,
-    /// AppleSkin's last regeneration estimate (`appleskin::GainCache`).
-    appleskin_cache: std::cell::RefCell<horizon_client::appleskin::GainCache>,
+    /// AppleSkin's pulse (`appleskin::Flash`), stepped each client tick.
+    appleskin_flash: std::cell::Cell<horizon_client::appleskin::Flash>,
     /// JEI's item list and recipe window (`game/jei.rs`).
     jei: jei::JeiUi,
     /// What ends the game with an error; kept as it is, so main can tell a debug crash.
@@ -11823,7 +11823,7 @@ impl<'a> Game<'a> {
             luminance: None,
             see_through_vertices: Vec::new(),
             health_hud: hud_layout::HealthHud::default(),
-            appleskin_cache: Default::default(),
+            appleskin_flash: Default::default(),
             jei: Default::default(),
             started: now,
             previous: now,

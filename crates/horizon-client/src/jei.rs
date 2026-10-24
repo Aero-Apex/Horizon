@@ -309,6 +309,122 @@ pub fn window(screen_h: f32, category: Category, recipes: usize) -> Window {
     }
 }
 
+/// What a search term looks at (`IngredientFilter`'s prefixes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    /// No prefix: the item's name.
+    Name,
+    /// `@`: the mod's name or id.
+    Mod,
+    /// `#`: the tooltip's lines.
+    Tooltip,
+    /// `$`: the item's tags.
+    Tag,
+    /// `&`: the resource id.
+    Id,
+}
+
+/// One word of a search: `-` before it negates, `|` joins alternatives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Part {
+    pub negate: bool,
+    pub field: Field,
+    pub text: String,
+}
+
+/// What an item is searched by.
+#[derive(Clone, Debug, Default)]
+pub struct Haystack {
+    pub name: String,
+    pub id: String,
+    pub mod_name: String,
+    pub tooltip: String,
+    pub tags: Vec<String>,
+}
+
+/// A search as JEI reads it: terms separated by spaces all have to match; a
+/// term is alternatives joined by `|`; each starts with `-` (not), `@` (mod),
+/// `#` (tooltip), `$` (tag) or `&` (id); `"quotes"` keep spaces in a term.
+pub fn parse_query(query: &str) -> Vec<Vec<Part>> {
+    let mut words: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for c in query.to_lowercase().chars() {
+        match c {
+            '"' => quoted = !quoted,
+            ' ' if !quoted => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+        .into_iter()
+        .map(|word| {
+            word.split('|')
+                .filter(|alt| !alt.is_empty())
+                .map(|alt| {
+                    let (negate, alt) = match alt.strip_prefix('-') {
+                        Some(rest) => (true, rest),
+                        None => (false, alt),
+                    };
+                    let (field, text) = match alt.chars().next() {
+                        Some('@') => (Field::Mod, &alt[1..]),
+                        Some('#') => (Field::Tooltip, &alt[1..]),
+                        Some('$') => (Field::Tag, &alt[1..]),
+                        Some('&') => (Field::Id, &alt[1..]),
+                        _ => (Field::Name, alt),
+                    };
+                    Part {
+                        negate,
+                        field,
+                        text: text.to_owned(),
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|alts| !alts.is_empty())
+        .collect()
+}
+
+/// Whether the search needs the tooltip text (it is slow to make).
+pub fn needs_tooltip(query: &[Vec<Part>]) -> bool {
+    query
+        .iter()
+        .flatten()
+        .any(|p| p.field == Field::Tooltip)
+}
+
+/// Whether `item` passes every term.
+pub fn matches(query: &[Vec<Part>], item: &Haystack) -> bool {
+    query.iter().all(|alternatives| {
+        alternatives.iter().any(|part| {
+            let found = match part.field {
+                Field::Name => item.name.to_lowercase().contains(&part.text),
+                Field::Mod => {
+                    item.mod_name.to_lowercase().contains(&part.text)
+                        || item
+                            .id
+                            .split_once(':')
+                            .is_some_and(|(ns, _)| ns.contains(&part.text))
+                }
+                Field::Tooltip => item.tooltip.to_lowercase().contains(&part.text),
+                Field::Tag => item
+                    .tags
+                    .iter()
+                    .any(|t| t.to_lowercase().contains(&part.text)),
+                Field::Id => item.id.to_lowercase().contains(&part.text),
+            };
+            found != part.negate
+        })
+    })
+}
+
 /// The item list beside an inventory screen: where its grid, page row and
 /// search box go, in GUI pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -501,6 +617,47 @@ mod tests {
         assert_eq!(one.per_page, w.per_page);
         assert_eq!(one.h, HEADER + 62.0 + 6.0);
         assert_eq!(one.frame_y(1), HEADER + 66.0);
+    }
+
+    #[test]
+    fn searches_read_like_jei() {
+        let stone = Haystack {
+            name: "Stone Bricks".into(),
+            id: "minecraft:stone_bricks".into(),
+            mod_name: "Minecraft".into(),
+            tooltip: "Stone Bricks
+Building".into(),
+            tags: vec!["minecraft:stone_bricks".into(), "c:building".into()],
+        };
+        let create = Haystack {
+            name: "Andesite Casing".into(),
+            id: "create:andesite_casing".into(),
+            mod_name: "Create".into(),
+            tooltip: "Andesite Casing".into(),
+            tags: vec![],
+        };
+        let hit = |q: &str, h: &Haystack| matches(&parse_query(q), h);
+        assert!(hit("", &stone));
+        assert!(hit("brick", &stone));
+        assert!(!hit("brick", &create));
+        assert!(hit("@minecraft", &stone));
+        assert!(hit("@create", &create));
+        assert!(!hit("@create", &stone));
+        assert!(hit("$building", &stone));
+        assert!(hit("#building", &stone));
+        assert!(hit("&stone_bricks", &stone));
+        // Negation and alternatives.
+        assert!(hit("-casing", &stone));
+        assert!(!hit("-casing", &create));
+        assert!(hit("brick|casing", &stone));
+        assert!(hit("brick|casing", &create));
+        assert!(!hit("brick casing", &stone));
+        assert!(hit("@minecraft -brick", &Haystack { name: "Dirt".into(), id: "minecraft:dirt".into(), mod_name: "Minecraft".into(), ..Haystack::default() }));
+        // Quotes keep a phrase together.
+        assert!(hit("\"stone bricks\"", &stone));
+        assert!(!hit("\"bricks stone\"", &stone));
+        assert!(needs_tooltip(&parse_query("a #b")));
+        assert!(!needs_tooltip(&parse_query("a @b")));
     }
 
     #[test]

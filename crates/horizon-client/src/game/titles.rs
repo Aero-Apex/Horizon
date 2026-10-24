@@ -44,6 +44,7 @@ impl Game<'_> {
     /// The title, action bar and selected-item parts of `Hud.tick`.
     pub(super) fn tick_hud(&mut self) {
         self.titles.tick();
+        self.appleskin_tick();
         let held = self.held_name();
         self.tool_highlight
             .tick(held, f64::from(self.settings.notification_display_time));

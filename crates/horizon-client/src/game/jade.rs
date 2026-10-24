@@ -16,9 +16,12 @@ const TOOLS: [(&str, &str); 4] = [
     ("shovel", "minecraft:mineable/shovel"),
     ("hoe", "minecraft:mineable/hoe"),
 ];
+/// `BoxStyle.DEFAULT_PADDING` (3) and the box's 1 pixel border.
 const PAD: f32 = 4.0;
+/// The gap between the icon and the text, and between lines (`marginBottom`).
+const ICON_GAP: f32 = 3.0;
+const LINE_GAP: f32 = 2.0;
 const ICON: f32 = 16.0;
-const ROW: f32 = 10.0;
 
 /// What the crosshair is on, gathered from the world.
 struct Target {
@@ -27,8 +30,17 @@ struct Target {
     /// Whose it is, as the line under the rest: `Minecraft`.
     owner: String,
     lines: Vec<Line>,
-    /// A mob's health and maximum.
-    health: Option<(f32, f32)>,
+    /// A mob's health, maximum health and absorption.
+    health: Option<(f32, f32, f32)>,
+    /// A mob's armor points.
+    armor: f32,
+}
+
+/// One line of the box.
+enum Row {
+    Text(String, u32),
+    Hearts(jade::IconRow, f32),
+    Armor(jade::IconRow, f32),
 }
 
 fn sprite(name: &'static str, x: i32, y: i32) -> GuiDraw {
@@ -93,7 +105,15 @@ impl Game<'_> {
                 title,
                 owner: jade::namespace_name(&id),
                 lines: Vec::new(),
-                health: Some((m.health, horizon_client::mobs::finalize::max_health(m))),
+                health: Some((
+                    m.health,
+                    horizon_client::mobs::finalize::max_health(m),
+                    0.0,
+                )),
+                armor: horizon_client::mobs::finalize::value(
+                    m,
+                    horizon_client::mobs::finalize::Attr::Armor,
+                ) as f32,
             });
         }
         let (hit, _) = block?;
@@ -127,6 +147,7 @@ impl Game<'_> {
             owner: jade::namespace_name(&id),
             lines,
             health: None,
+            armor: 0.0,
         })
     }
 
@@ -142,68 +163,87 @@ impl Game<'_> {
             return;
         };
         let atlas = &self.gui.atlas;
-        let owner = format!("\u{a7}9\u{a7}o{}", t.owner);
-        let hearts = t.health.map(|(h, m)| jade::hearts(h, m));
         let text_width = |s: &str| HudBatch::text_width(atlas, s);
-        let mut text_w = text_width(&t.title).max(text_width(&owner));
-        for l in &t.lines {
-            text_w = text_w.max(text_width(&l.text));
+        // The lines: name, health and armor, the details, the mod's name.
+        let white = u32::MAX;
+        let mut rows = vec![Row::Text(t.title.clone(), white)];
+        if let Some((health, max, absorption)) = t.health {
+            let row = jade::IconRow::health(max, health, absorption);
+            rows.push(Row::Hearts(row, health));
         }
-        let health_text = t
-            .health
-            .map(|(h, m)| jade::health_text(h, m))
-            .filter(|_| hearts.is_some_and(|h| h.containers >= 10) && t.health.is_some());
-        if let Some(h) = &health_text {
-            text_w = text_w.max(text_width(h));
-        }
-        if let Some(h) = hearts {
-            text_w = text_w.max(h.containers as f32 * 8.0 + 1.0);
-        }
-        let icon_w = if t.icon.is_some() { ICON + PAD } else { 0.0 };
-        let mut rows = 2 + t.lines.len();
-        if hearts.is_some() {
-            rows += 1;
-        }
-        let w = PAD * 2.0 + icon_w + text_w;
-        let h = (rows as f32 * ROW + PAD * 2.0 - 2.0).max(ICON + PAD * 2.0);
-        let bosses = self.bosses.bars.bars.len() as f32;
-        let x0 = ((batch.width - w) / 2.0).floor();
-        let y0 = 4.0 + if bosses > 0.0 { 10.0 + bosses * 19.0 } else { 0.0 };
-        // Background and a pale border.
-        batch.fill(atlas, x0, y0, w, h, rgba(0, 0, 0, 150));
-        let edge = rgba(255, 255, 255, 70);
-        batch.fill(atlas, x0, y0, w, 1.0, edge);
-        batch.fill(atlas, x0, y0 + h - 1.0, w, 1.0, edge);
-        batch.fill(atlas, x0, y0, 1.0, h, edge);
-        batch.fill(atlas, x0 + w - 1.0, y0, 1.0, h, edge);
-        let tx = x0 + PAD + icon_w;
-        let mut ty = y0 + PAD;
-        batch.text(atlas, &t.title, tx, ty, u32::MAX, true);
-        ty += ROW;
-        if let Some(hearts) = hearts {
-            let mut draws = Vec::new();
-            for n in 0..hearts.containers as i32 {
-                let (hx, hy) = (tx as i32 + n * 8, ty as i32);
-                draws.push(sprite("hud/heart/container", hx, hy));
-                if (n as u32) < hearts.full {
-                    draws.push(sprite("hud/heart/full", hx, hy));
-                } else if n as u32 == hearts.full && hearts.half {
-                    draws.push(sprite("hud/heart/half", hx, hy));
-                }
-            }
-            hud_layout::paint(batch, atlas, &draws);
-            if let Some(text) = &health_text {
-                let hx = tx + hearts.containers as f32 * 8.0 + 4.0;
-                batch.text(atlas, text, hx, ty, rgba(255, 85, 85, 255), true);
-            }
-            ty += ROW;
+        if t.armor > 0.0 {
+            rows.push(Row::Armor(jade::IconRow::armor(t.armor), t.armor));
         }
         for l in &t.lines {
             let [_, r, g, b] = l.color.to_be_bytes();
-            batch.text(atlas, &l.text, tx, ty, rgba(r, g, b, 255), true);
-            ty += ROW;
+            rows.push(Row::Text(l.text.clone(), rgba(r, g, b, 255)));
         }
-        batch.text(atlas, &owner, tx, ty, u32::MAX, true);
+        // `ModNameProvider`: the owner in the item mod name style.
+        rows.push(Row::Text(format!("\u{a7}9\u{a7}o{}", t.owner), white));
+        let size = |row: &Row| -> (f32, f32) {
+            match row {
+                Row::Text(text, _) => (text_width(text), 8.0),
+                Row::Hearts(r, _) | Row::Armor(r, _) => r.size(&text_width),
+            }
+        };
+        let text_w = rows.iter().map(|r| size(r).0).fold(0.0, f32::max);
+        let text_h: f32 = rows.iter().map(|r| size(r).1).sum::<f32>()
+            + LINE_GAP * (rows.len() - 1) as f32;
+        let icon_w = if t.icon.is_some() { ICON + ICON_GAP } else { 0.0 };
+        let w = PAD * 2.0 + icon_w + text_w;
+        let h = PAD * 2.0 + text_h.max(ICON);
+        let bosses = self.bosses.bars.bars.len() as f32;
+        let x0 = ((batch.width - w) / 2.0).floor();
+        let y0 = 4.0 + if bosses > 0.0 { 10.0 + bosses * 19.0 } else { 0.0 };
+        // `jade:dark`: a dark box with a lighter edge, at the overlay's
+        // 70% opacity.
+        let alpha = (0.7_f32 * 255.0) as u8;
+        batch.fill(atlas, x0, y0, w, h, rgba(46, 46, 46, alpha));
+        batch.fill(atlas, x0 + 1.0, y0 + 1.0, w - 2.0, h - 2.0, rgba(19, 19, 19, alpha));
+        let tx = x0 + PAD + icon_w;
+        let mut ty = y0 + PAD + ((text_h.max(ICON) - text_h) / 2.0).floor();
+        let mut draws: Vec<GuiDraw> = Vec::new();
+        for row in &rows {
+            let (_, row_h) = size(row);
+            match row {
+                Row::Text(text, color) => {
+                    batch.text(atlas, text, tx, ty, *color, true);
+                }
+                Row::Hearts(r, health) => {
+                    for (dx, dy, slot) in r.slots() {
+                        let (x, y) = (tx as i32 + dx, ty as i32 + dy);
+                        draws.push(sprite("hud/heart/container", x, y));
+                        let (full, half) = jade::heart_sprites(slot, *health);
+                        if full {
+                            draws.push(sprite("hud/heart/full", x, y));
+                        } else if half {
+                            draws.push(sprite("hud/heart/half", x, y));
+                        }
+                    }
+                    if let Some(text) = &r.text {
+                        batch.text(atlas, text, tx + 10.0, ty + 1.0, jade::NORMAL, true);
+                    }
+                }
+                Row::Armor(r, armor) => {
+                    for (dx, dy, slot) in r.slots() {
+                        let (x, y) = (tx as i32 + dx, ty as i32 + dy);
+                        draws.push(sprite("hud/armor_empty", x, y));
+                        let (full, half) = jade::armor_sprites(slot, *armor);
+                        if full {
+                            draws.push(sprite("hud/armor_full", x, y));
+                        }
+                        if half {
+                            draws.push(sprite("hud/armor_half", x, y));
+                        }
+                    }
+                    if let Some(text) = &r.text {
+                        batch.text(atlas, text, tx + 10.0, ty + 1.0, jade::NORMAL, true);
+                    }
+                }
+            }
+            ty += row_h + LINE_GAP;
+        }
+        hud_layout::paint(batch, atlas, &draws);
         // How far along the block being dug is.
         if let Some(m) = &self.mining {
             let done = m.progress.clamp(0.0, 1.0);

@@ -59,3 +59,26 @@ maps, the `horizontal`, `vertical`, `horizontal+vertical`, `vertical+horizontal`
 source (`processor/simple/*`, `processor/DirectionMaps`, `properties/*`, `util/QuadUtil`,
 `util/MathUtil`). This file is derived from that work and is offered under the same license;
 the LGPL-3.0 text is at <https://www.gnu.org/licenses/lgpl-3.0.html>.
+
+## AppleSkin
+
+`crates/horizon-client/src/appleskin.rs` and `game/appleskin.rs` port
+[AppleSkin](https://github.com/squeek502/AppleSkin) by squeek502 (the Unlicense, public domain):
+the HUD overlays, the health estimate, the tooltip row and the F3 line. The two images in
+`crates/horizon-client/assets/appleskin/` (`icons.png`, `tooltip_hunger_outline.png`) are AppleSkin's
+own, public domain.
+
+## Controlling and Searchables
+
+`crates/horizon-client/src/controlling.rs` and the Key Binds page in `options_ui.rs` port
+[Controlling](https://github.com/Jaredlll08/Controlling) and [Searchables](https://github.com/Jaredlll08/Searchables)
+by Jared Lloyd (Jaredlll08), both MIT licensed: the search language, the filters, the sort orders and
+the free keys list.
+
+## Jade
+
+The health and armor rows and the default colours of the Jade overlay (`jade.rs`, `game/jade.rs`) follow
+[Jade](https://github.com/Snownee/Jade) by Snownee (`HealthElement`, `ArmorElement`, `ColorPalette`,
+the `jade:dark` theme), which is licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+(<https://creativecommons.org/licenses/by-nc-sa/4.0/>). That part of Horizon is therefore for
+non-commercial use, and changes to it must be shared under the same license.

@@ -199,6 +199,14 @@ const KEYS: &[(&str, KeyCode)] = &[
     ("key.keyboard.right.alt", KeyCode::AltRight),
     ("key.keyboard.right.win", KeyCode::SuperRight),
 ];
+/// Every keyboard key's name, then the mouse buttons' (`InputConstants`'s
+/// names), for Controlling's list of free keys.
+pub fn all_input_names() -> Vec<String> {
+    KEYS.iter()
+        .map(|(n, _)| (*n).to_owned())
+        .chain(["left", "right", "middle", "4", "5", "6", "7", "8"].map(|n| format!("key.mouse.{n}")))
+        .collect()
+}
 pub fn key_code(name: &str) -> Option<KeyCode> {
     KEYS.iter().find(|(n, _)| *n == name).map(|(_, k)| *k)
 }

@@ -167,37 +167,124 @@ pub fn harvest(tool: Option<&str>, requires_tool: bool, can_harvest: bool) -> Op
     }
 }
 
-/// A mob's health bar as heart icons: `full` hearts, an optional half, and
-/// how many containers (at most 10; more health than that is written out).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Hearts {
-    pub containers: u32,
-    pub full: u32,
-    pub half: bool,
+/// Jade's defaults for the health and armor rows (`VanillaPlugin`):
+/// `entity_health.max_for_render`, `.icons_per_line`, `entity_armor.max_for_render`.
+pub const HEALTH_MAX_FOR_RENDER: i32 = 40;
+pub const ICONS_PER_LINE: i32 = 10;
+pub const ARMOR_MAX_FOR_RENDER: f32 = 20.0;
+/// The theme's normal text colour (`ColorPalette.DEFAULT.normal`).
+pub const NORMAL: u32 = 0xFFA0_A0A0;
+
+/// `Mth.ceil`.
+fn ceil(x: f32) -> i32 {
+    x.ceil() as i32
 }
-pub fn hearts(health: f32, max_health: f32) -> Hearts {
-    let max = max_health.max(health).max(0.0);
-    let containers = ((max / 2.0).ceil() as u32).clamp(1, 10);
-    // Scale into the ten icons when the mob has more health than they hold.
-    let scale = if max > 20.0 { 20.0 / max } else { 1.0 };
-    let halves = (health.max(0.0) * scale).ceil() as u32;
-    Hearts {
-        containers,
-        full: (halves / 2).min(containers),
-        half: halves % 2 == 1 && halves / 2 < containers,
+
+/// `DisplayHelper.dfCommas`: `0.##`, no grouping.
+pub fn two_decimals(x: f32) -> String {
+    let s = format!("{x:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// A row of icons, hearts or armor (`HealthElement`, `ArmorElement`): too
+/// much to draw is a single icon and a number.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IconRow {
+    /// The number shown beside one icon, when the value is too big for icons.
+    pub text: Option<String>,
+    pub icons: i32,
+    pub per_line: i32,
+    pub lines: i32,
+}
+impl IconRow {
+    /// `HealthElement`'s constructor. `absorption` is extra health shown as
+    /// more hearts.
+    pub fn health(max_health: f32, health: f32, absorption: f32) -> Self {
+        let icon_count = ceil(max_health) + ceil(absorption);
+        if icon_count > HEALTH_MAX_FOR_RENDER {
+            // Without fractions: whole numbers.
+            let max = ceil(max_health) as f32;
+            let now = ceil(health + absorption) as f32;
+            return Self {
+                text: Some(format!("{}/{}", two_decimals(now), two_decimals(max))),
+                icons: 1,
+                per_line: 1,
+                lines: 1,
+            };
+        }
+        let icons = ceil(icon_count as f32 * 0.5);
+        Self {
+            text: None,
+            icons,
+            per_line: ICONS_PER_LINE.min(icons),
+            lines: ceil(icons as f32 / ICONS_PER_LINE as f32),
+        }
+    }
+    /// `ArmorElement`'s constructor.
+    pub fn armor(armor: f32) -> Self {
+        if armor > ARMOR_MAX_FOR_RENDER {
+            return Self {
+                text: Some(two_decimals(ceil(armor) as f32)),
+                icons: 1,
+                per_line: 1,
+                lines: 1,
+            };
+        }
+        let half = armor * 0.5;
+        let icons = ceil(half);
+        Self {
+            text: None,
+            icons,
+            per_line: ICONS_PER_LINE.min(icons),
+            lines: ceil(half / ICONS_PER_LINE as f32),
+        }
+    }
+    /// The element's size: a number is 10 pixels right of its icon and 9
+    /// high; icons are 8 apart and 4 rows apart, so overlapping rows.
+    pub fn size(&self, text_width: &dyn Fn(&str) -> f32) -> (f32, f32) {
+        match &self.text {
+            Some(t) => (text_width(t) + 10.0, 9.0),
+            None => (
+                (8 * self.per_line + 1) as f32,
+                (5 + 4 * self.lines) as f32,
+            ),
+        }
+    }
+    /// The icons of a row, back to front (`HealthElement.extractRenderState`):
+    /// (x, y, slot) from the element's top left, where `slot` counts from 1.
+    pub fn slots(&self) -> Vec<(i32, i32, i32)> {
+        let mut out = Vec::new();
+        let mut x = (self.icons - 1) % self.per_line.max(1) * 8;
+        let mut y = self.lines * 4 - 4;
+        for i in (1..=self.icons).rev() {
+            out.push((x, y, i));
+            x -= 8;
+            if x < 0 {
+                x = self.per_line * 8 - 8;
+                y -= 4;
+            }
+        }
+        out
     }
 }
 
-/// `7.5 / 20` style health text for a mob.
-pub fn health_text(health: f32, max_health: f32) -> String {
-    let trim = |v: f32| {
-        if (v - v.round()).abs() < 0.05 {
-            format!("{}", v.round() as i32)
-        } else {
-            format!("{v:.1}")
-        }
-    };
-    format!("{} / {}", trim(health), trim(max_health))
+/// Which sprites a heart slot shows (`HealthElement`): the container always,
+/// a full heart up to `floor(hearts)`, a half heart for the fraction.
+/// `health` is rounded as Jade rounds it.
+pub fn heart_sprites(slot: i32, health: f32) -> (bool, bool) {
+    let hearts = health.round() * 0.5;
+    let full = slot as f32 <= hearts.floor();
+    let half = !full && (slot as f32) > hearts && (slot as f32) < hearts + 1.0;
+    (full, half)
+}
+
+/// The armor sprites of a slot (`ArmorElement`): full to `floor(armor)`,
+/// half for the fraction (the empty icon is always under).
+pub fn armor_sprites(slot: i32, armor: f32) -> (bool, bool) {
+    let a = armor * 0.5;
+    let full = slot as f32 <= a.floor();
+    let half = (slot as f32) > a && (slot as f32) < a + 1.0;
+    (full, half)
 }
 
 #[cfg(test)]
@@ -273,40 +360,68 @@ mod tests {
     }
 
     #[test]
-    fn hearts_follow_health() {
-        assert_eq!(
-            hearts(20.0, 20.0),
-            Hearts {
-                containers: 10,
-                full: 10,
-                half: false
-            }
-        );
-        assert_eq!(
-            hearts(7.0, 20.0),
-            Hearts {
-                containers: 10,
-                full: 3,
-                half: true
-            }
-        );
-        // A pig has 10 health: five hearts.
-        assert_eq!(
-            hearts(10.0, 10.0),
-            Hearts {
-                containers: 5,
-                full: 5,
-                half: false
-            }
-        );
-        // 100 health scales into the ten icons: half of it is five hearts.
-        assert_eq!(hearts(50.0, 100.0).full, 5);
-        assert_eq!(hearts(0.0, 20.0).full, 0);
+    fn small_health_is_hearts_big_health_is_a_number() {
+        // A villager: 20 health is 10 hearts and no text.
+        let row = IconRow::health(20.0, 20.0, 0.0);
+        assert_eq!((row.icons, row.per_line, row.lines), (10, 10, 1));
+        assert!(row.text.is_none());
+        let measure = |s: &str| s.len() as f32 * 6.0;
+        assert_eq!(row.size(&measure), (81.0, 9.0));
+        // A pig: 10 health is 5 hearts.
+        let pig = IconRow::health(10.0, 10.0, 0.0);
+        assert_eq!(pig.icons, 5);
+        assert_eq!(pig.size(&measure), (41.0, 9.0));
+        // 40 health points is the most drawn as hearts: 20 hearts, two rows
+        // of ten, drawn 4 pixels apart.
+        let big = IconRow::health(40.0, 40.0, 0.0);
+        assert_eq!((big.icons, big.lines), (20, 2));
+        assert_eq!(big.size(&measure), (81.0, 13.0));
+        // More than that: one icon and the numbers, without fractions.
+        let boss = IconRow::health(300.0, 299.5, 0.0);
+        assert_eq!(boss.text.as_deref(), Some("300/300"));
+        assert_eq!(boss.icons, 1);
+        assert_eq!(boss.size(&measure), (7.0 * 6.0 + 10.0, 9.0));
+        // Absorption adds hearts.
+        assert_eq!(IconRow::health(20.0, 20.0, 4.0).icons, 12);
     }
 
     #[test]
-    fn health_reads_as_numbers() {
-        assert_eq!(health_text(7.5, 20.0), "7.5 / 20");
-        assert_eq!(health_text(20.0, 20.0), "20 / 20");
+    fn hearts_are_drawn_back_to_front_in_rows() {
+        let row = IconRow::health(20.0, 20.0, 0.0);
+        let slots = row.slots();
+        assert_eq!(slots.len(), 10);
+        // The last heart first, at the right.
+        assert_eq!(slots[0], (72, 0, 10));
+        assert_eq!(slots[9], (0, 0, 1));
+        // Two rows: the first row (slots 1 to 10) is the lower one, 4 apart.
+        let two = IconRow::health(40.0, 40.0, 0.0).slots();
+        assert_eq!(two[0], (72, 4, 20));
+        assert_eq!(two[9], (0, 4, 11));
+        assert_eq!(two[10], (72, 0, 10));
+        // A single icon of a short row sits at the left.
+        let three = IconRow::health(6.0, 6.0, 0.0).slots();
+        assert_eq!(three[0], (16, 0, 3));
+    }
+
+    #[test]
+    fn a_heart_is_full_half_or_empty() {
+        // 7 health rounds to 7: three and a half hearts.
+        assert_eq!(heart_sprites(3, 7.0), (true, false));
+        assert_eq!(heart_sprites(4, 7.0), (false, true));
+        assert_eq!(heart_sprites(5, 7.0), (false, false));
+        assert_eq!(heart_sprites(10, 20.0), (true, false));
+        assert_eq!(heart_sprites(1, 1.0), (false, true));
+        // Armor 5: two full and a half.
+        assert_eq!(armor_sprites(2, 5.0), (true, false));
+        assert_eq!(armor_sprites(3, 5.0), (false, true));
+        assert_eq!(IconRow::armor(25.0).text.as_deref(), Some("25"));
+        assert_eq!(IconRow::armor(20.0).icons, 10);
+    }
+
+    #[test]
+    fn numbers_print_without_trailing_zeros() {
+        assert_eq!(two_decimals(7.5), "7.5");
+        assert_eq!(two_decimals(20.0), "20");
+        assert_eq!(two_decimals(0.126), "0.13");
     }
 }

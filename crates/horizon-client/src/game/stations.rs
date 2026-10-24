@@ -1835,24 +1835,12 @@ impl Game<'_> {
                 lines.push((self.translate(key, fallback), rgba(255, 85, 85, 255)));
             }
         }
-        // AppleSkin: what eating it gives, and what the bar cannot hold.
-        let extras = &self.settings.extras;
-        if extras.appleskin
-            && extras.appleskin_tooltips
-            && let Some(info) = self.res.items().get(&stack.item)
-            && let Some((nutrition, saturation)) = info.food
+        // AppleSkin: a row of hunger and saturation icons for food, drawn by
+        // `draw_tooltip_lines` where this marker line is.
+        if display.name_visible(self.screen == Screen::Creative)
+            && let Some(marker) = self.appleskin_tooltip_marker(stack)
         {
-            let food = self.player.as_ref().map_or(0, |p| p.health.food.food);
-            let meal = horizon_client::appleskin::Meal {
-                nutrition: nutrition as i32,
-                saturation,
-            };
-            for (text, rgb) in horizon_client::appleskin::tooltip_lines(meal, food) {
-                lines.push((
-                    text,
-                    rgba((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, 255),
-                ));
-            }
+            lines.push((marker, u32::MAX));
         }
         lines
     }
@@ -1893,14 +1881,22 @@ impl Game<'_> {
             return;
         }
         let atlas = &self.gui.atlas;
+        // A marker line stands for AppleSkin's food row: icons, 20 tall.
+        let rows: Vec<Option<horizon_client::appleskin::TooltipRow>> = lines
+            .iter()
+            .map(|(t, _)| horizon_client::appleskin::TooltipRow::from_marker(t))
+            .collect();
+        let measure = |t: &str| HudBatch::text_width(atlas, t);
         let w = lines
             .iter()
-            .map(|(t, _)| HudBatch::text_width(atlas, t))
+            .zip(&rows)
+            .map(|((t, _), row)| row.as_ref().map_or_else(|| measure(t), |r| r.width(&measure)))
             .fold(0.0, f32::max);
+        let line_height = |i: usize| rows[i].as_ref().map_or(10.0, |r| r.height() as f32);
         let h = if lines.len() == 1 {
             8.0
         } else {
-            8.0 + 2.0 + (lines.len() - 1) as f32 * 10.0
+            8.0 + 2.0 + (1..lines.len()).map(line_height).sum::<f32>()
         };
         let mut x = x + 12.0;
         let mut y = y - 12.0;
@@ -1948,8 +1944,13 @@ impl Game<'_> {
         );
         let mut ty = y;
         for (i, (text, color)) in lines.iter().enumerate() {
-            batch.text(atlas, text, x, ty, *color, true);
-            ty += if i == 0 { 12.0 } else { 10.0 };
+            if let Some(row) = &rows[i] {
+                let draws = row.draws(x as i32, ty as i32);
+                horizon_client::hud_layout::paint(batch, atlas, &draws);
+            } else {
+                batch.text(atlas, text, x, ty, *color, true);
+            }
+            ty += if i == 0 { 12.0 } else { line_height(i) };
         }
     }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.

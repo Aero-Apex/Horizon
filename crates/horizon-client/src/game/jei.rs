@@ -216,7 +216,7 @@ impl Game<'_> {
     fn jei_refresh(&mut self) {
         let term = self.jei.search.value.clone();
         if self.jei.term.as_deref() != Some(term.as_str()) {
-            self.jei.results = self.creative_screen.search_results(&term, &self.pack.names);
+            self.jei.results = self.jei_search(&term);
             self.jei.term = Some(term);
             self.jei.page = 0;
         }
@@ -225,6 +225,58 @@ impl Game<'_> {
             log::info!("Horizon: {} recipes for the item list", table.len());
             self.jei.table = Some(Arc::new(table));
         }
+    }
+
+    /// The creative items a search finds, as JEI reads it (`logic::parse_query`):
+    /// indices into the creative screen's items.
+    fn jei_search(&self, term: &str) -> Vec<usize> {
+        let query = logic::parse_query(term);
+        let stacks = self.creative_screen.search_items();
+        if query.is_empty() {
+            return (0..stacks.len()).collect();
+        }
+        let tooltip = logic::needs_tooltip(&query);
+        let wants_tags = query
+            .iter()
+            .flatten()
+            .any(|p| p.field == logic::Field::Tag);
+        // Tag -> items, turned round, when a term asks for tags.
+        let mut tags: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+        if wants_tags {
+            for (tag, items) in &self.res.items().item_tags {
+                for item in items {
+                    tags.entry(item.as_str()).or_default().push(tag.as_str());
+                }
+            }
+        }
+        stacks
+            .iter()
+            .enumerate()
+            .filter(|(_, stack)| {
+                let id = stack.item.to_string();
+                let haystack = logic::Haystack {
+                    name: self.pack.names.item(&stack.item),
+                    mod_name: horizon_client::jade::namespace_name(&id),
+                    tooltip: if tooltip {
+                        self.stack_tooltip(stack)
+                            .into_iter()
+                            .map(|(line, _)| line)
+                            .collect::<Vec<_>>()
+                            .join("
+")
+                    } else {
+                        String::new()
+                    },
+                    tags: tags
+                        .get(id.as_str())
+                        .map(|t| t.iter().map(|s| (*s).to_owned()).collect())
+                        .unwrap_or_default(),
+                    id,
+                };
+                logic::matches(&query, &haystack)
+            })
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// Opens a recipe window for `query`, remembering the one it replaces.

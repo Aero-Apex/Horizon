@@ -1,41 +1,43 @@
-//! AppleSkin, rewritten for Horizon (`docs/extras.md`). The Java mod (squeek502's
-//! AppleSkin, public domain) draws on the food and health bars what food would
-//! do: a flashing preview of the hunger it restores, the golden saturation
-//! outlines, the exhaustion underlay and the hearts regeneration would give,
-//! plus food values in item tooltips and the food numbers on F3. This is that,
-//! as draw calls over this client's own HUD layout (`hud_layout::BarPositions`
-//! says where the bars drew), so it follows jitter, regeneration wobble and
-//! rows exactly.
-use crate::hud_layout::{BarPositions, Blend, GuiDraw, HeartKind, argb, ceil, fill, white};
-use horizon_world::food::{Difficulty, FoodData, FoodWorld};
+//! AppleSkin for Horizon (`docs/extras.md`): a port of squeek502's AppleSkin
+//! (the Unlicense; its `HUDOverlayHandler`, `TooltipOverlayHandler`,
+//! `FoodHelper` and `DebugInfoHudEntry`). What food in hand would do is drawn
+//! over the food and health bars, the exhaustion builds up under the food
+//! bar, food tooltips show hunger and saturation as icons, and F3 gets the
+//! food numbers. The icons and the exhaustion strip are the mod's own
+//! `icons.png` (`assets/appleskin`), packed into the HUD atlas; the overlays
+//! go where this client's HUD layout drew the icons (`BarPositions`), which
+//! is where the mod's own copy of vanilla's jitter puts them.
+use crate::hud_layout::{BarPositions, Blend, GuiDraw, PoseOp, argb, white};
+use crate::text::Text;
 use std::borrow::Cow;
-use std::convert::Infallible;
 
-/// The food bar's icons, and its width in pixels (10 icons, 8 apart, the last 9 wide).
-pub const ICONS: i32 = 10;
-pub const BAR_WIDTH: i32 = 81;
-/// `FoodData`'s exhaustion limit: at 4 a point of saturation (or hunger) goes.
+/// The mod's icon sheet and tooltip outline in the HUD atlas.
+pub const ICONS: &str = "appleskin/icons";
+pub const OUTLINE: &str = "appleskin/tooltip_hunger_outline";
+/// The sheet is 256 by 256.
+const SHEET: i32 = 256;
+/// `FoodHelper.MAX_EXHAUSTION`.
 pub const MAX_EXHAUSTION: f32 = 4.0;
-/// How strong the flashing previews get (AppleSkin's `maxHudOverlayFlashAlpha`).
+/// `FoodHelper.REGEN_EXHAUSTION_INCREMENT`.
+const REGEN_EXHAUSTION_INCREMENT: f32 = 6.0;
+/// `maxHudOverlayFlashAlpha`'s default.
 pub const MAX_FLASH: f32 = 0.65;
-/// Ticks one flash takes: AppleSkin pulses with `sin(tick * 0.1)`.
-const FLASH_SPEED: f32 = 0.1;
-/// The simulation's cut-off: ticks of natural regeneration looked ahead.
-const MAX_SIM_TICKS: u32 = 20_000;
-/// The golden outline of a saturation icon.
-const GOLD: (u32, u32, u32) = (0xFF, 0xD8, 0x3A);
+/// The food bar's width in pixels (ten icons, eight apart, the last nine wide).
+pub const BAR_WIDTH: i32 = 81;
 
-/// What the player may switch off.
+/// What the player may switch off (`ModConfig`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Options {
-    /// The flashing hunger and saturation preview for the food in hand.
+    /// `showFoodValuesHudOverlay`: the hunger (and saturation) food in hand restores.
     pub restored: bool,
-    /// The golden saturation outlines on the food icons.
+    /// `showSaturationHudOverlay`: the golden saturation on the food icons.
     pub saturation: bool,
-    /// The exhaustion bar under the food icons.
+    /// `showFoodExhaustionHudUnderlay`: the exhaustion strip behind the food bar.
     pub exhaustion: bool,
-    /// The flashing hearts food would regenerate.
+    /// `showFoodHealthHudOverlay`: the hearts food would regenerate.
     pub health: bool,
+    /// `showFoodValuesHudOverlayWhenOffhand`.
+    pub offhand: bool,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -44,116 +46,153 @@ impl Default for Options {
             saturation: true,
             exhaustion: true,
             health: true,
+            offhand: true,
         }
     }
 }
 
-/// What eating the food in hand gives (`FoodProperties`).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A food item as the overlays see it (`FoodProperties` and `Consumable`).
+#[derive(Clone, Debug, PartialEq)]
 pub struct Meal {
     pub nutrition: i32,
     pub saturation: f32,
+    /// A harmful effect among what eating applies (`FoodHelper.isRotten`):
+    /// the icons are the green hunger ones.
+    pub rotten: bool,
+    /// The (amplifier, duration in ticks) of the Regeneration each group of
+    /// applied effects gives, for the health estimate.
+    pub regeneration: Vec<(i32, i32)>,
 }
 
-/// The state the overlays are drawn from.
+/// The pulse of the previews: `HUDOverlayHandler.onClientTick`'s triangle
+/// wave, a step of 1/8 a client tick between -0.5 and 1.5, clamped to 0..1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Flash {
+    unclamped: f32,
+    direction: f32,
+}
+impl Default for Flash {
+    fn default() -> Self {
+        Self {
+            unclamped: 0.0,
+            direction: 1.0,
+        }
+    }
+}
+impl Flash {
+    /// One client tick.
+    pub fn tick(&mut self) {
+        self.unclamped += self.direction * 0.125;
+        if self.unclamped >= 1.5 {
+            self.direction = -1.0;
+        } else if self.unclamped <= -0.5 {
+            self.direction = 1.0;
+        }
+    }
+    /// `resetFlash`: the pulse starts again from nothing.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+    /// The alpha of the previews, 0 to `max`.
+    pub fn alpha(&self, max: f32) -> f32 {
+        self.unclamped.clamp(0.0, 1.0) * max.clamp(0.0, 1.0)
+    }
+}
+
+/// The player's state the overlays are drawn from.
 #[derive(Clone, Copy, Debug)]
 pub struct Inputs {
-    pub tick: i32,
     pub food: i32,
     pub saturation: f32,
     pub exhaustion: f32,
     pub health: f32,
     pub max_health: f32,
     pub hardcore: bool,
-    pub heart_kind: HeartKind,
-    pub hunger_effect: bool,
-    pub difficulty: Difficulty,
-    /// Natural regeneration game rule.
+    /// The difficulty is Peaceful (health comes back at once there).
+    pub peaceful: bool,
+    pub poisoned: bool,
+    pub withered: bool,
+    pub regenerating: bool,
+    /// The `naturalRegeneration` game rule (`ClientSyncHandler.naturalRegeneration`).
     pub natural_regeneration: bool,
-    /// The food in the acting hand, when the player could eat it.
-    pub meal: Option<Meal>,
 }
 
-/// The preview's pulse, 0 to `MAX_FLASH`: `sin(tick * 0.1)` mapped to 0..1.
-pub fn flash(tick: i32) -> f32 {
-    ((tick as f32 * FLASH_SPEED).sin() * 0.5 + 0.5) * MAX_FLASH
-}
-
-/// `FoodData.eat` for a meal: what the bar would hold after eating.
-pub fn after_eating(food: i32, saturation: f32, meal: Meal) -> (i32, f32) {
-    let mut data = FoodData {
-        food,
-        saturation,
-        exhaustion: 0.0,
-        timer: 0,
-    };
-    data.eat_properties(meal.nutrition, meal.saturation);
-    (data.food, data.saturation)
-}
-
-/// A pretend world for `FoodData::tick`: only health and the game rules.
-struct Sim {
-    health: f32,
-    max_health: f32,
-    difficulty: Difficulty,
-    regenerate: bool,
-}
-impl FoodWorld for Sim {
-    type Error = Infallible;
-    type Level = ();
-    fn level(&mut self, _: &mut FoodData) -> Result<(), Infallible> {
-        Ok(())
-    }
-    fn difficulty(&mut self, _: (), _: &mut FoodData) -> Result<Difficulty, Infallible> {
-        Ok(self.difficulty)
-    }
-    fn natural_regeneration(&mut self, _: (), _: &mut FoodData) -> Result<bool, Infallible> {
-        Ok(self.regenerate)
-    }
-    fn is_hurt(&mut self, _: &mut FoodData) -> Result<bool, Infallible> {
-        Ok(self.health > 0.0 && self.health < self.max_health)
-    }
-    fn heal(&mut self, _: &mut FoodData, amount: f32) -> Result<(), Infallible> {
-        self.health = (self.health + amount).min(self.max_health);
-        Ok(())
-    }
-    fn health(&mut self, _: &mut FoodData) -> Result<f32, Infallible> {
-        Ok(self.health)
-    }
-    fn hurt_starvation(&mut self, _: (), _: &mut FoodData, _: f32) -> Result<(), Infallible> {
-        Ok(())
-    }
-}
-
-/// The health natural regeneration would give from this food state with
-/// nothing else spending it: vanilla's own `FoodData.tick`, run until it can
-/// no longer heal (AppleSkin's `getEstimatedHealthIncrement`).
-pub fn regeneration(i: &Inputs, food: i32, saturation: f32) -> f32 {
-    if !i.natural_regeneration || i.health >= i.max_health || i.health <= 0.0 {
+/// `FoodHelper.getEstimatedHealthIncrement(foodLevel, saturation, exhaustion)`:
+/// the health natural regeneration gives while the food lasts.
+pub fn estimated_health_increment(
+    mut food: i32,
+    mut saturation: f32,
+    mut exhaustion: f32,
+) -> f32 {
+    let mut health = 0.0f32;
+    if !exhaustion.is_finite() || !saturation.is_finite() {
         return 0.0;
     }
-    let mut sim = Sim {
-        health: i.health,
-        max_health: i.max_health,
-        difficulty: i.difficulty,
-        regenerate: i.natural_regeneration,
-    };
-    let mut data = FoodData {
-        food,
-        saturation,
-        exhaustion: i.exhaustion,
-        timer: 0,
-    };
-    for _ in 0..MAX_SIM_TICKS {
-        let before = sim.health;
-        let Ok(()) = data.tick(&mut sim);
-        // Below 18 food nothing heals (full food with saturation is above that).
-        let can_heal = data.food >= 18;
-        if sim.health >= sim.max_health || (!can_heal && sim.health == before) {
-            break;
+    while food >= 18 {
+        while exhaustion > MAX_EXHAUSTION {
+            exhaustion -= MAX_EXHAUSTION;
+            if saturation > 0.0 {
+                saturation = (saturation - 1.0).max(0.0);
+            } else {
+                food -= 1;
+            }
+        }
+        // `Float.compare(saturation, Float.MIN_NORMAL) > 0`.
+        if food >= 20 && saturation > f32::MIN_POSITIVE {
+            // Fast regeneration, as many ticks as it takes to pass the
+            // exhaustion limit at once.
+            let limited = saturation.min(REGEN_EXHAUSTION_INCREMENT);
+            let until_above_max = MAX_EXHAUSTION.next_up() - exhaustion;
+            let iterations = ((until_above_max / limited).ceil() as i32).max(1);
+            health += (limited / REGEN_EXHAUSTION_INCREMENT) * iterations as f32;
+            exhaustion += limited * iterations as f32;
+        } else if food >= 18 {
+            // Slow regeneration.
+            health += 1.0;
+            exhaustion += REGEN_EXHAUSTION_INCREMENT;
         }
     }
-    sim.health - i.health
+    health
+}
+
+/// `FoodHelper.getEstimatedHealthIncrement(player, food)`: what eating `meal`
+/// would regenerate, naturally and through its Regeneration.
+pub fn meal_health(i: &Inputs, meal: &Meal) -> f32 {
+    if !(i.health > 0.0 && i.health < i.max_health) {
+        return 0.0;
+    }
+    let food = (i.food + meal.nutrition).min(20);
+    let mut increment = 0.0;
+    if food >= 18 && i.natural_regeneration {
+        let saturation = (i.saturation + meal.saturation).min(food as f32);
+        increment = estimated_health_increment(food, saturation, i.exhaustion);
+    }
+    // Regeneration: a heal every `50 >> amplifier` ticks.
+    for &(amplifier, duration) in &meal.regeneration {
+        let interval = (50i32.checked_shr(amplifier.max(0) as u32).unwrap_or(0)).max(1);
+        increment += (duration / interval) as f32;
+    }
+    increment
+}
+
+fn ceil(x: f32) -> i32 {
+    x.ceil() as i32
+}
+
+/// `blit(GUI_TEXTURED, texture, x, y, u, v, w, h, 256, 256, color)`.
+fn blit(x: i32, y: i32, u: i32, v: i32, w: i32, h: i32, color: u32) -> GuiDraw {
+    GuiDraw::Blit {
+        texture: Cow::Borrowed(ICONS),
+        blend: Blend::Textured,
+        x,
+        y,
+        w,
+        h,
+        uv: [u as f32, v as f32],
+        src: [w, h],
+        tex: [SHEET, SHEET],
+        color,
+    }
 }
 
 fn sprite(name: &'static str, x: i32, y: i32, color: u32) -> GuiDraw {
@@ -169,88 +208,78 @@ fn sprite(name: &'static str, x: i32, y: i32, color: u32) -> GuiDraw {
     }
 }
 
-/// The exhaustion underlay: a pale strip growing from the bar's right end as
-/// exhaustion builds toward 4, drawn under the icons (the caller puts it
-/// before the vanilla icons).
+/// `drawExhaustionOverlay`: the strip of the sheet at (81 - width, 18),
+/// growing from the bar's right end, 75% opaque, under the food icons.
 pub fn exhaustion_underlay(bars: &BarPositions, exhaustion: f32) -> Vec<GuiDraw> {
-    let Some(&(x, y)) = bars.food.first() else {
+    if bars.food.is_empty() {
         return Vec::new();
-    };
+    }
+    let (right, top) = bars.food_base;
     let ratio = (exhaustion / MAX_EXHAUSTION).clamp(0.0, 1.0);
     let width = (ratio * BAR_WIDTH as f32) as i32;
-    if width <= 0 {
-        return Vec::new();
-    }
-    let right = x + 9;
-    vec![fill(right - width, y, right, y + 9, argb(0x80, 0xDC, 0xDC, 0xE6))]
+    vec![blit(
+        right - width,
+        top,
+        BAR_WIDTH - width,
+        18,
+        width,
+        9,
+        white(0.75),
+    )]
 }
 
-/// How much of icon `n` (0 = rightmost) a saturation of `saturation` fills, 0..1.
-fn icon_fill(saturation: f32, n: i32) -> f32 {
-    (saturation / 2.0 - n as f32).clamp(0.0, 1.0)
-}
-
-/// A golden outline round an icon, `amount` of it (0..1) from the bottom up,
-/// in quarters as the mod's four saturation sprites are.
-fn outline(x: i32, y: i32, amount: f32, color: u32) -> Vec<GuiDraw> {
-    let quarters = (amount * 4.0).ceil() as i32;
-    if quarters <= 0 {
-        return Vec::new();
-    }
-    // Rows of the 9 tall icon covered, from the bottom.
-    let rows = match quarters {
-        1 => 3,
-        2 => 5,
-        3 => 7,
-        _ => 9,
-    };
-    let top = y + 9 - rows;
-    let mut out = vec![
-        fill(x, y + 8, x + 9, y + 9, color),
-        fill(x, top, x + 1, y + 9, color),
-        fill(x + 8, top, x + 9, y + 9, color),
-    ];
-    if rows == 9 {
-        out.push(fill(x, y, x + 9, y + 1, color));
-    }
-    out
-}
-
-/// The golden saturation outlines for `saturation`, drawn over the icons.
-/// `from` skips what that much saturation already covers (the preview shows
-/// only the gain).
+/// `drawSaturationOverlay`: the golden icons of the sheet over the food
+/// bar. `gained` is saturation to show beyond `level`.
 pub fn saturation_overlay(
     bars: &BarPositions,
-    saturation: f32,
-    from: f32,
+    gained: f32,
+    level: f32,
     alpha: f32,
 ) -> Vec<GuiDraw> {
-    let color = argb(
-        (alpha.clamp(0.0, 1.0) * 255.0) as u32,
-        GOLD.0,
-        GOLD.1,
-        GOLD.2,
-    );
+    if level + gained < 0.0 {
+        return Vec::new();
+    }
+    let color = white(alpha);
+    let modified = (level + gained).min(20.0).max(0.0);
+    let mut start = 0;
+    let end = ceil(modified / 2.0);
+    // The gained part starts where the current saturation stops.
+    if gained != 0.0 {
+        start = (level / 2.0).max(0.0) as i32;
+    }
     let mut out = Vec::new();
-    for (n, &(x, y)) in bars.food.iter().enumerate() {
-        let now = icon_fill(saturation, n as i32);
-        if now <= icon_fill(from, n as i32) {
+    for i in start..end {
+        let Some(&(x, y)) = bars.food.get(i as usize) else {
             continue;
-        }
-        out.extend(outline(x, y, now, color));
+        };
+        let effective = modified / 2.0 - i as f32;
+        let u = if effective >= 1.0 {
+            27
+        } else if effective > 0.5 {
+            18
+        } else if effective > 0.25 {
+            9
+        } else {
+            0
+        };
+        out.push(blit(x, y, u, 0, 9, 9, color));
     }
     out
 }
 
-/// The food icons eating would fill, drawn flashing over the bar.
-pub fn restored_hunger(
+/// `drawHungerOverlay`: the food icons eating would fill, over a faint
+/// background, flashing.
+pub fn hunger_overlay(
     bars: &BarPositions,
+    restored: i32,
     food: i32,
-    after: i32,
-    hunger_effect: bool,
+    rotten: bool,
     alpha: f32,
 ) -> Vec<GuiDraw> {
-    let (empty, half, full) = if hunger_effect {
+    if restored <= 0 {
+        return Vec::new();
+    }
+    let (empty, half, full) = if rotten {
         (
             "hud/food_empty_hunger",
             "hud/food_half_hunger",
@@ -259,374 +288,689 @@ pub fn restored_hunger(
     } else {
         ("hud/food_empty", "hud/food_half", "hud/food_full")
     };
+    let modified = (food + restored).clamp(0, 20);
+    let start = (food / 2).max(0);
+    let end = ceil(modified as f32 / 2.0);
     let mut out = Vec::new();
-    for (n, &(x, y)) in bars.food.iter().enumerate() {
-        let n = n as i32;
-        // Icon n shows hunger points 2n+1 and 2n+2: skipped when eating
-        // does not reach it, or the bar already fills it.
-        if n * 2 + 1 > after || n * 2 + 2 <= food {
+    for i in start..end {
+        let Some(&(x, y)) = bars.food.get(i as usize) else {
             continue;
-        }
-        // A faint background so the preview reads over a full-looking bar.
+        };
         out.push(sprite(empty, x, y, white(alpha * 0.25)));
-        // As vanilla's: full when both points are reached, half on one.
-        let name = if n * 2 + 1 < after { full } else { half };
-        out.push(sprite(name, x, y, white(alpha)));
+        let is_half = i * 2 + 1 == modified;
+        out.push(sprite(if is_half { half } else { full }, x, y, white(alpha)));
     }
     out
 }
 
-/// The hearts regeneration would give, flashing over the health bar:
-/// `gain` health points above the current ones.
-pub fn health_preview(
+/// `drawHealthOverlay`: the hearts food would regenerate, flashing.
+pub fn health_overlay(
     bars: &BarPositions,
     health: f32,
-    gain: f32,
-    kind: HeartKind,
+    modified_health: f32,
     hardcore: bool,
     alpha: f32,
 ) -> Vec<GuiDraw> {
-    let current = ceil(health);
-    let target = ceil((health + gain).max(health));
-    let mut out = Vec::new();
-    if target <= current {
-        return out;
+    if modified_health <= health {
+        return Vec::new();
     }
-    for (c, &(x, y)) in bars.hearts.iter().enumerate() {
-        let halves = c as i32 * 2;
-        if halves + 1 > target || halves + 2 <= current {
+    let (container, half, full) = if hardcore {
+        (
+            "hud/heart/container_hardcore",
+            "hud/heart/hardcore_half",
+            "hud/heart/hardcore_full",
+        )
+    } else {
+        ("hud/heart/container", "hud/heart/half", "hud/heart/full")
+    };
+    let fixed = ceil(modified_health);
+    let start = ((ceil(health) as f32 / 2.0).max(0.0)) as i32;
+    let end = ((modified_health / 2.0).ceil().max(0.0)) as i32;
+    let mut out = Vec::new();
+    for i in start..end {
+        let Some(&(x, y)) = bars.hearts.get(i as usize) else {
             continue;
-        }
-        let name = heart(kind, hardcore, halves + 1 == target);
-        out.push(sprite(name, x, y, white(alpha)));
+        };
+        out.push(sprite(container, x, y, white(alpha * 0.25)));
+        let is_half = i * 2 + 1 == fixed;
+        out.push(sprite(if is_half { half } else { full }, x, y, white(alpha)));
     }
     out
 }
 
-fn heart(kind: HeartKind, hardcore: bool, half: bool) -> &'static str {
-    // The same sprites `hud_layout` draws: [normal, hardcore] x [full, half].
-    let table: [&str; 4] = match kind {
-        HeartKind::Normal => [
-            "hud/heart/full",
-            "hud/heart/half",
-            "hud/heart/hardcore_full",
-            "hud/heart/hardcore_half",
-        ],
-        HeartKind::Poisoned => [
-            "hud/heart/poisoned_full",
-            "hud/heart/poisoned_half",
-            "hud/heart/poisoned_hardcore_full",
-            "hud/heart/poisoned_hardcore_half",
-        ],
-        HeartKind::Withered => [
-            "hud/heart/withered_full",
-            "hud/heart/withered_half",
-            "hud/heart/withered_hardcore_full",
-            "hud/heart/withered_hardcore_half",
-        ],
-        HeartKind::Frozen => [
-            "hud/heart/frozen_full",
-            "hud/heart/frozen_half",
-            "hud/heart/frozen_hardcore_full",
-            "hud/heart/frozen_hardcore_half",
-        ],
-    };
-    table[usize::from(hardcore) * 2 + usize::from(half)]
-}
-
-/// Everything drawn over the bars for this frame, plus the exhaustion
-/// underlay that goes before the vanilla icons.
+/// Everything drawn over the bars for this frame, plus the exhaustion strip
+/// that goes before the food icons.
 #[derive(Debug, Default, PartialEq)]
 pub struct Overlay {
     pub under: Vec<GuiDraw>,
     pub over: Vec<GuiDraw>,
+    /// Whether food is in hand and could be eaten: the pulse runs only then.
+    pub holding_food: bool,
 }
 
-/// The overlays for one frame. `gain` is the heart estimate for the meal in
-/// hand (`regeneration` of the food state after eating minus before), or
-/// `None` when it is not known yet.
-pub fn overlay(o: &Options, i: &Inputs, bars: &BarPositions, gain: Option<f32>) -> Overlay {
+/// The overlays of one frame (`onPreRenderFood`, `onRenderFood` and
+/// `onRenderHealth`). `meal` is the food in hand the player could eat, if
+/// any; `alpha` is the pulse's (`Flash::alpha`).
+pub fn overlay(
+    o: &Options,
+    i: &Inputs,
+    bars: &BarPositions,
+    meal: Option<&Meal>,
+    alpha: f32,
+) -> Overlay {
     let mut out = Overlay::default();
-    if bars.food.is_empty() {
-        // A mount's hearts replace the food bar.
-        return out;
-    }
-    if o.exhaustion {
+    if o.exhaustion && !bars.food.is_empty() {
         out.under = exhaustion_underlay(bars, i.exhaustion);
     }
-    if o.saturation {
-        out.over
-            .extend(saturation_overlay(bars, i.saturation, 0.0, 1.0));
+    let any = o.restored || o.saturation || o.health;
+    if !any {
+        return out;
     }
-    let alpha = flash(i.tick);
-    if let Some(meal) = i.meal {
-        let (after, after_sat) = after_eating(i.food, i.saturation, meal);
-        if o.restored {
+    if !bars.food.is_empty() && o.saturation {
+        out.over
+            .extend(saturation_overlay(bars, 0.0, i.saturation, 1.0));
+    }
+    let Some(meal) = meal else {
+        return out;
+    };
+    out.holding_food = true;
+    if !bars.food.is_empty() && o.restored {
+        out.over
+            .extend(hunger_overlay(bars, meal.nutrition, i.food, meal.rotten, alpha));
+        let new_food = i.food + meal.nutrition;
+        let new_saturation = i.saturation + meal.saturation;
+        if o.saturation {
+            let gained = if new_saturation > new_food as f32 {
+                new_food as f32 - i.saturation
+            } else {
+                meal.saturation
+            };
             out.over
-                .extend(restored_hunger(bars, i.food, after, i.hunger_effect, alpha));
-            if o.saturation {
-                out.over
-                    .extend(saturation_overlay(bars, after_sat, i.saturation, alpha));
-            }
+                .extend(saturation_overlay(bars, gained, i.saturation, alpha));
         }
-        if o.health
-            && let Some(gain) = gain.filter(|g| *g > 0.0)
-        {
-            out.over.extend(health_preview(
-                bars,
-                i.health,
-                gain,
-                i.heart_kind,
-                i.hardcore,
-                alpha,
-            ));
+    }
+    if o.health && should_show_estimated_health(i, bars) {
+        let increment = meal_health(i, meal);
+        let modified = (i.health + increment).min(i.max_health);
+        if i.health < modified {
+            out.over
+                .extend(health_overlay(bars, i.health, modified, i.hardcore, alpha));
         }
     }
     out
 }
 
-/// The health food would regenerate, beyond what the current state does.
-pub fn meal_gain(i: &Inputs) -> Option<f32> {
-    let meal = i.meal?;
-    let (after, after_sat) = after_eating(i.food, i.saturation, meal);
-    Some(regeneration(i, after, after_sat) - regeneration(i, i.food, i.saturation))
+/// `shouldShowEstimatedHealth`.
+fn should_show_estimated_health(i: &Inputs, bars: &BarPositions) -> bool {
+    // No hearts to draw on (infinite health): nothing.
+    if bars.hearts.is_empty() || i.peaceful {
+        return false;
+    }
+    // Food that heals right away has nothing to show beside the heal.
+    if i.food >= 18 {
+        return false;
+    }
+    !(i.poisoned || i.withered || i.regenerating)
 }
 
-/// What `meal_gain` last worked out and for which state, so the simulation
-/// runs when the food state changes (20 times a second at most), not per frame.
-#[derive(Debug, Default)]
-pub struct GainCache {
-    key: Option<[u32; 9]>,
-    value: Option<f32>,
+/// Whether a status effect is harmful (`MobEffectCategory.HARMFUL`), for the
+/// food that makes the hunger icons green.
+pub fn harmful_effect(id: &str) -> bool {
+    matches!(
+        id.strip_prefix("minecraft:").unwrap_or(id),
+        "slowness"
+            | "mining_fatigue"
+            | "instant_damage"
+            | "nausea"
+            | "blindness"
+            | "hunger"
+            | "weakness"
+            | "poison"
+            | "wither"
+            | "levitation"
+            | "unluck"
+            | "darkness"
+            | "bad_omen"
+            | "raid_omen"
+            | "trial_omen"
+            | "infested"
+            | "oozing"
+            | "weaving"
+    )
 }
-impl GainCache {
-    pub fn gain(&mut self, i: &Inputs) -> Option<f32> {
-        let meal = i.meal?;
-        let key = [
-            i.food as u32,
-            i.saturation.to_bits(),
-            i.exhaustion.to_bits(),
-            i.health.to_bits(),
-            i.max_health.to_bits(),
-            meal.nutrition as u32,
-            meal.saturation.to_bits(),
-            i.difficulty as u32,
-            u32::from(i.natural_regeneration),
-        ];
-        if self.key != Some(key) {
-            self.value = meal_gain(i);
-            self.key = Some(key);
+
+/// How an icon of the tooltip's hunger row is outlined
+/// (`TooltipOverlayHandler.FoodOutline`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outline {
+    Negative,
+    Extra,
+    Normal,
+    Partial,
+    Missing,
+}
+impl Outline {
+    fn get(modified: i32, default: i32, i: i32) -> Self {
+        if modified < 0 {
+            Self::Negative
+        } else if modified > default && default <= i {
+            Self::Extra
+        } else if modified > i + 1 || default == modified {
+            Self::Normal
+        } else if modified == i + 1 {
+            Self::Partial
+        } else {
+            Self::Missing
         }
-        self.value
+    }
+    fn argb(self) -> u32 {
+        let c = |r: f32, g: f32, b: f32, a: f32| {
+            let f = |v: f32| (v * 255.0).floor() as u32;
+            argb(f(a), f(r), f(g), f(b))
+        };
+        match self {
+            Self::Negative => c(1.0, 1.0, 1.0, 1.0),
+            Self::Extra => c(0.06, 0.32, 0.02, 1.0),
+            Self::Normal => c(0.0, 0.0, 0.0, 1.0),
+            Self::Partial => c(0.53, 0.21, 0.08, 1.0),
+            Self::Missing => c(0.62, 0.0, 0.0, 0.5),
+        }
     }
 }
 
-/// A tooltip's food lines: hunger and saturation, and what is wasted when the
-/// bar cannot hold it all. `(text, 0xRRGGBB)` each.
-pub fn tooltip_lines(meal: Meal, food: i32) -> Vec<(String, u32)> {
-    let mut lines = vec![
-        (
-            format!("Hunger: +{}", meal.nutrition),
-            0xE8A23A,
-        ),
-        (
-            format!("Saturation: +{:.1}", meal.saturation),
-            0xFFD83A,
-        ),
-    ];
-    let room = (20 - food).max(0);
-    if meal.nutrition > room {
-        lines.push((
-            format!("Wastes {} hunger when eaten now", meal.nutrition - room),
-            0xFF8A3A,
-        ));
+/// The food row of an item tooltip (`TooltipOverlayHandler.FoodOverlay`):
+/// hunger icons, and under them saturation icons.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TooltipRow {
+    default_hunger: i32,
+    modified_hunger: i32,
+    modified_saturation: f32,
+    rotten: bool,
+    hunger_bars: i32,
+    hunger_text: Option<String>,
+    saturation_bars: i32,
+    saturation_text: Option<String>,
+}
+impl TooltipRow {
+    /// The row for an item whose default values are (`default_hunger`,
+    /// `default_saturation`) and whose modified ones are the `modified_*`
+    /// (mods change them; here they are the same). `None` when there is no
+    /// hunger to show.
+    pub fn new(
+        default_hunger: i32,
+        default_saturation: f32,
+        modified_hunger: i32,
+        modified_saturation: f32,
+        rotten: bool,
+    ) -> Option<Self> {
+        let biggest_hunger = default_hunger.max(modified_hunger);
+        let biggest_saturation = default_saturation.max(modified_saturation);
+        let mut hunger_bars = (biggest_hunger.abs() as f32 / 2.0).ceil() as i32;
+        let mut hunger_text = None;
+        if hunger_bars > 10 {
+            hunger_text = Some(format!(
+                "x{}",
+                if biggest_hunger < 0 { -1 } else { 1 } * hunger_bars
+            ));
+            hunger_bars = 1;
+        }
+        let mut saturation_bars = (biggest_saturation.abs() / 2.0).ceil() as i32;
+        let mut saturation_text = None;
+        if saturation_bars > 10 || saturation_bars == 0 {
+            saturation_text = Some(format!(
+                "x{}",
+                if biggest_saturation < 0.0 { -1 } else { 1 } * saturation_bars
+            ));
+            saturation_bars = 1;
+        }
+        (hunger_bars > 0).then_some(Self {
+            default_hunger,
+            modified_hunger,
+            modified_saturation,
+            rotten,
+            hunger_bars,
+            hunger_text,
+            saturation_bars,
+            saturation_text,
+        })
     }
-    lines
+    /// The text of the tooltip line that stands for this row (it starts with
+    /// U+0001); `None` when the food gives no hunger.
+    pub fn marker(nutrition: i32, saturation: f32, rotten: bool) -> Option<String> {
+        Self::new(nutrition, saturation, nutrition, saturation, rotten)?;
+        Some(format!(
+            "\u{1}{nutrition}:{}:{}",
+            saturation.to_bits(),
+            u8::from(rotten)
+        ))
+    }
+    /// The row a marker line stands for.
+    pub fn from_marker(line: &str) -> Option<Self> {
+        let mut parts = line.strip_prefix('\u{1}')?.split(':');
+        let nutrition: i32 = parts.next()?.parse().ok()?;
+        let saturation = f32::from_bits(parts.next()?.parse().ok()?);
+        let rotten = parts.next()? == "1";
+        Self::new(nutrition, saturation, nutrition, saturation, rotten)
+    }
+    /// `getHeight`: hunger, a pixel, saturation, and the three that look best.
+    pub fn height(&self) -> i32 {
+        9 + 1 + 7 + 3
+    }
+    /// `getWidth`; `text` measures a string in the tooltip's font.
+    pub fn width(&self, text: &dyn Fn(&str) -> f32) -> f32 {
+        let hunger = self.hunger_bars as f32 * 9.0
+            + self.hunger_text.as_deref().map_or(0.0, text);
+        let saturation = self.saturation_bars as f32 * 7.0
+            + self.saturation_text.as_deref().map_or(0.0, text);
+        hunger.max(saturation)
+    }
+    /// `onRenderTooltip` with the row's top left at (`x0`, `y0`).
+    pub fn draws(&self, x0: i32, y0: i32) -> Vec<GuiDraw> {
+        let mut out = Vec::new();
+        let (empty, half, full) = if self.rotten {
+            (
+                "hud/food_empty",
+                "hud/food_half_hunger",
+                "hud/food_full_hunger",
+            )
+        } else {
+            ("hud/food_empty", "hud/food_half", "hud/food_full")
+        };
+        // Right to left, so that the icons face the right way.
+        let mut x = x0 + (self.hunger_bars - 1) * 9;
+        let y = y0;
+        let mut i = 0;
+        while i < self.hunger_bars * 2 {
+            out.push(sprite(empty, x, y, u32::MAX));
+            let outline = Outline::get(self.modified_hunger, self.default_hunger, i);
+            if outline != Outline::Normal {
+                out.push(GuiDraw::Sprite {
+                    sprite: Cow::Borrowed(OUTLINE),
+                    x,
+                    y,
+                    w: 9,
+                    h: 9,
+                    region: None,
+                    color: outline.argb(),
+                    blend: Blend::Textured,
+                });
+            }
+            let default_half = self.default_hunger - 1 == i;
+            out.push(sprite(
+                if default_half { half } else { full },
+                x,
+                y,
+                white(0.25),
+            ));
+            if self.modified_hunger > i {
+                let modified_half = self.modified_hunger - 1 == i;
+                out.push(sprite(
+                    if modified_half { half } else { full },
+                    x,
+                    y,
+                    u32::MAX,
+                ));
+            }
+            x -= 9;
+            i += 2;
+        }
+        if let Some(text) = &self.hunger_text {
+            x += 18;
+            out.push(GuiDraw::Push(vec![
+                PoseOp::Translate(x as f32, y as f32),
+                PoseOp::Scale(0.75, 0.75),
+            ]));
+            out.push(text_draw(text, 2, 2));
+            out.push(GuiDraw::Pop);
+        }
+        let y = y0 + 10;
+        let absolute = self.modified_saturation.abs();
+        let mut x = x0 + (self.saturation_bars - 1) * 7;
+        let mut i = 0;
+        while i < self.saturation_bars * 2 {
+            let effective = (absolute - i as f32) / 2.0;
+            let faded = absolute <= i as f32;
+            let color = if faded { white(0.5) } else { u32::MAX };
+            let u = if effective >= 1.0 {
+                21
+            } else if effective > 0.5 {
+                14
+            } else if effective > 0.25 {
+                7
+            } else if effective > 0.0 {
+                0
+            } else {
+                28
+            };
+            let v = if self.modified_saturation >= 0.0 { 27 } else { 34 };
+            out.push(blit(x, y, u, v, 7, 7, color));
+            x -= 7;
+            i += 2;
+        }
+        if let Some(text) = &self.saturation_text {
+            x += 14;
+            out.push(GuiDraw::Push(vec![
+                PoseOp::Translate(x as f32, y as f32),
+                PoseOp::Scale(0.75, 0.75),
+            ]));
+            out.push(text_draw(text, 2, 1));
+            out.push(GuiDraw::Pop);
+        }
+        out
+    }
 }
 
-/// The food numbers AppleSkin adds to F3.
-pub fn debug_lines(food: i32, saturation: f32, exhaustion: f32) -> Vec<String> {
-    vec![format!(
-        "[AppleSkin] hunger: {food}  saturation: {saturation:.2}  exhaustion: {exhaustion:.2}/{MAX_EXHAUSTION:.1}"
-    )]
+fn text_draw(text: &str, x: i32, y: i32) -> GuiDraw {
+    GuiDraw::Text {
+        text: Text::literal(text),
+        x,
+        y,
+        color: 0xFFAA_AAAA,
+        shadow: false,
+    }
+}
+
+/// Java's `DecimalFormat("#.##")`: at most two decimals, none when whole.
+fn up_to_two(x: f32) -> String {
+    let s = format!("{x:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// `DebugInfoHudEntry`: the line AppleSkin adds to F3.
+pub fn debug_line(food: i32, saturation: f32, exhaustion: f32) -> String {
+    format!(
+        "hunger: {food}, sat: {}, exh: {exhaustion:.2}/{}",
+        up_to_two(saturation),
+        up_to_two(MAX_EXHAUSTION)
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hud_layout::HeartKind;
 
     fn bars() -> BarPositions {
         BarPositions {
-            food: (0..ICONS).map(|n| (200 - n * 8 - 9, 100)).collect(),
-            hearts: (0..ICONS).map(|n| (100 + n * 8, 100)).collect(),
+            food: (0..10).map(|n| (200 - n * 8 - 9, 100)).collect(),
+            hearts: (0..10).map(|n| (100 + n * 8, 100)).collect(),
+            food_base: (200, 100),
         }
     }
-    fn inputs(food: i32, saturation: f32, health: f32, meal: Option<Meal>) -> Inputs {
+    fn inputs(food: i32, saturation: f32, health: f32) -> Inputs {
         Inputs {
-            tick: 7,
             food,
             saturation,
             exhaustion: 0.0,
             health,
             max_health: 20.0,
             hardcore: false,
-            heart_kind: HeartKind::Normal,
-            hunger_effect: false,
-            difficulty: Difficulty::Normal,
+            peaceful: false,
+            poisoned: false,
+            withered: false,
+            regenerating: false,
             natural_regeneration: true,
-            meal,
         }
     }
-    const APPLE: Meal = Meal {
-        nutrition: 4,
-        saturation: 2.4,
-    };
-
-    #[test]
-    fn eating_follows_food_data() {
-        assert_eq!(after_eating(10, 1.0, APPLE).0, 14);
-        let (food, saturation) = after_eating(19, 19.0, APPLE);
-        assert_eq!(food, 20);
-        assert_eq!(saturation, 20.0);
+    fn apple() -> Meal {
+        Meal {
+            nutrition: 4,
+            saturation: 2.4,
+            rotten: false,
+            regeneration: Vec::new(),
+        }
+    }
+    fn blit_at(d: &GuiDraw) -> (i32, i32, [f32; 2], i32) {
+        match d {
+            GuiDraw::Blit { x, y, uv, w, .. } => (*x, *y, *uv, *w),
+            _ => panic!("a blit"),
+        }
     }
 
     #[test]
-    fn exhaustion_grows_from_the_right() {
+    fn the_flash_is_the_triangle_wave_of_the_mod() {
+        let mut f = Flash::default();
+        assert_eq!(f.alpha(MAX_FLASH), 0.0);
+        let mut alphas = Vec::new();
+        for _ in 0..40 {
+            f.tick();
+            alphas.push(f.alpha(1.0));
+        }
+        // Up by an eighth a tick, to the top and past it, then back down.
+        assert_eq!(alphas[0], 0.125);
+        assert_eq!(alphas[7], 1.0);
+        assert_eq!(alphas[11], 1.0); // 1.5 reached, going down from here
+        assert!(alphas[16] < 1.0 && alphas[16] > 0.5);
+        assert_eq!(alphas[27], 0.0); // -0.5 reached
+        assert_eq!(alphas[28], 0.0);
+        assert_eq!(alphas[35], 0.5); // going up again
+        assert_eq!(alphas[39], 1.0);
+        f.reset();
+        assert_eq!(f, Flash::default());
+        let mut f = Flash::default();
+        for _ in 0..8 {
+            f.tick();
+        }
+        assert_eq!(f.alpha(MAX_FLASH), MAX_FLASH);
+    }
+
+    #[test]
+    fn exhaustion_is_the_sheets_strip_from_the_right() {
         let b = bars();
-        assert!(exhaustion_underlay(&b, 0.0).is_empty());
-        let GuiDraw::Fill { x0, x1, .. } = exhaustion_underlay(&b, 2.0)[0] else {
-            panic!("a fill");
-        };
-        // Half of the 81 pixel bar, ending at the rightmost icon's edge.
-        assert_eq!(x1, 200);
-        assert_eq!(x1 - x0, 40);
-        let GuiDraw::Fill { x0, x1, .. } = exhaustion_underlay(&b, 9.0)[0] else {
-            panic!("a fill");
-        };
-        assert_eq!(x1 - x0, BAR_WIDTH);
+        let d = exhaustion_underlay(&b, 2.0);
+        // Half of 81 pixels: 40, drawn from the sheet's (41, 18).
+        assert_eq!(blit_at(&d[0]), (200 - 40, 100, [41.0, 18.0], 40));
+        let d = exhaustion_underlay(&b, 99.0);
+        assert_eq!(blit_at(&d[0]), (200 - 81, 100, [0.0, 18.0], 81));
+        assert_eq!(blit_at(&exhaustion_underlay(&b, 0.0)[0]).3, 0);
     }
 
     #[test]
-    fn saturation_outlines_fill_icon_by_icon() {
+    fn saturation_picks_the_sheets_quarter_icons() {
         let b = bars();
-        // 5 saturation is two and a half icons: two full outlines, a half one.
-        let full = |n: usize| outline(b.food[n].0, b.food[n].1, 1.0, 0).len();
-        assert_eq!(full(0), 4);
-        let draws = saturation_overlay(&b, 5.0, 0.0, 1.0);
-        let per_icon = [4, 4, 3];
-        assert_eq!(draws.len(), per_icon.iter().sum::<usize>());
-        // Only the gain is shown when a base is given.
-        assert!(saturation_overlay(&b, 5.0, 5.0, 1.0).is_empty());
-        // 5 -> 6 completes the third icon's outline.
-        assert_eq!(saturation_overlay(&b, 6.0, 5.0, 1.0).len(), 4);
+        // 5 saturation: two full icons, then one at 0.5: 9 (> 0.25, not > 0.5).
+        let d = saturation_overlay(&b, 0.0, 5.0, 1.0);
+        let us: Vec<f32> = d.iter().map(|d| blit_at(d).2[0]).collect();
+        assert_eq!(us, vec![27.0, 27.0, 9.0]);
+        // 5.4 gives the third icon 0.7: the three quarters.
+        let d = saturation_overlay(&b, 0.0, 5.4, 1.0);
+        assert_eq!(blit_at(&d[2]).2[0], 18.0);
+        // The gained part starts where the level stops: 5 -> 8 is icons 2 and 3.
+        let d = saturation_overlay(&b, 3.0, 5.0, 0.5);
+        let xs: Vec<i32> = d.iter().map(|d| blit_at(d).0).collect();
+        assert_eq!(xs, vec![b.food[2].0, b.food[3].0]);
+        assert!(saturation_overlay(&b, -9.0, 5.0, 1.0).is_empty());
     }
 
     #[test]
-    fn restored_hunger_covers_the_icons_eating_fills() {
+    fn hunger_fills_the_icons_eating_reaches() {
         let b = bars();
-        // 10 food -> 14: icons 5 and 6 (hunger 11..14).
-        let draws = restored_hunger(&b, 10, 14, false, 0.5);
-        assert_eq!(draws.len(), 4);
-        // An odd gain ends on a half icon.
-        let draws = restored_hunger(&b, 10, 13, false, 0.5);
-        let GuiDraw::Sprite { sprite, .. } = &draws[3] else {
-            panic!("a sprite");
-        };
-        assert_eq!(sprite, "hud/food_half");
-        assert!(restored_hunger(&b, 20, 20, false, 0.5).is_empty());
+        // 10 food, +4: icons 5 and 6 (food 11..14), the last a full one.
+        let d = hunger_overlay(&b, 4, 10, false, 0.5);
+        let names: Vec<_> = d
+            .iter()
+            .map(|d| match d {
+                GuiDraw::Sprite { sprite, x, .. } => (sprite.to_string(), *x),
+                _ => panic!("a sprite"),
+            })
+            .collect();
+        assert_eq!(names.len(), 4);
+        assert_eq!(names[1], ("hud/food_full".into(), b.food[5].0));
+        assert_eq!(names[3], ("hud/food_full".into(), b.food[6].0));
+        // An odd result ends on a half icon.
+        let d = hunger_overlay(&b, 3, 10, true, 1.0);
+        match &d[3] {
+            GuiDraw::Sprite { sprite, .. } => assert_eq!(sprite, "hud/food_half_hunger"),
+            _ => panic!(),
+        }
+        assert!(hunger_overlay(&b, 0, 10, false, 1.0).is_empty());
+        assert!(hunger_overlay(&b, -2, 10, false, 1.0).is_empty());
     }
 
     #[test]
-    fn regeneration_matches_vanilla_rules() {
-        // Full health: nothing to regenerate.
-        let full = inputs(20, 5.0, 20.0, None);
-        assert_eq!(regeneration(&full, 20, 5.0), 0.0);
-        // Hungry (food 10) cannot regenerate at all.
-        let hungry = inputs(10, 0.0, 10.0, None);
-        assert_eq!(regeneration(&hungry, 10, 0.0), 0.0);
-        // Full food with saturation heals fast: some health, never past max.
-        let healing = inputs(20, 6.0, 10.0, None);
-        let gain = regeneration(&healing, 20, 6.0);
-        assert!(gain > 0.0 && gain <= 10.0);
-        // Eating an apple at 17 food (below the 18 needed) starts regeneration.
-        let i = inputs(
-            17,
-            0.0,
-            10.0,
-            Some(Meal {
-                nutrition: 4,
-                saturation: 2.4,
-            }),
-        );
-        assert_eq!(regeneration(&i, 17, 0.0), 0.0);
-        assert!(meal_gain(&i).unwrap() > 0.0);
-        // The game rule off: no regeneration either way.
-        let mut off = i;
+    fn health_hearts_follow_the_mod() {
+        let b = bars();
+        // 7 health to 10: icons 3 (start is ceil(7)/2 = 3) to 4.
+        let d = health_overlay(&b, 7.0, 10.0, false, 0.5);
+        assert_eq!(d.len(), 4);
+        match &d[1] {
+            GuiDraw::Sprite { sprite, .. } => assert_eq!(sprite, "hud/heart/full"),
+            _ => panic!(),
+        }
+        // 7 to 9 ends on a half heart.
+        let d = health_overlay(&b, 7.0, 9.0, false, 0.5);
+        match &d[d.len() - 1] {
+            GuiDraw::Sprite { sprite, .. } => assert_eq!(sprite, "hud/heart/half"),
+            _ => panic!(),
+        }
+        assert!(health_overlay(&b, 7.0, 7.0, false, 1.0).is_empty());
+        let d = health_overlay(&b, 7.0, 9.0, true, 1.0);
+        match &d[0] {
+            GuiDraw::Sprite { sprite, .. } => assert_eq!(sprite, "hud/heart/container_hardcore"),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn the_health_estimate_is_the_mods_arithmetic() {
+        // Food 20, saturation 5, no exhaustion: fast regeneration.
+        let h = estimated_health_increment(20, 5.0, 0.0);
+        assert!(h > 5.0 && h < 7.0, "{h}");
+        // Food 18 gives one heart's point per 6 exhaustion until the food is
+        // too low: the loop ends when exhaustion drops food below 18.
+        let h = estimated_health_increment(18, 0.0, 0.0);
+        assert_eq!(h, 1.0);
+        assert_eq!(estimated_health_increment(17, 20.0, 0.0), 0.0);
+        assert_eq!(estimated_health_increment(20, f32::NAN, 0.0), 0.0);
+        assert_eq!(estimated_health_increment(20, 5.0, f32::INFINITY), 0.0);
+    }
+
+    #[test]
+    fn a_meals_health_needs_a_hurt_player_and_adds_regeneration() {
+        let golden = Meal {
+            nutrition: 4,
+            saturation: 9.6,
+            rotten: false,
+            regeneration: vec![(1, 100)],
+        };
+        // Regeneration II heals every 25 ticks: 100 / 25 = 4.
+        let hurt = inputs(10, 0.0, 10.0);
+        assert!(meal_health(&hurt, &golden) >= 4.0);
+        // A full-health player gets no estimate.
+        assert_eq!(meal_health(&inputs(10, 0.0, 20.0), &golden), 0.0);
+        // Natural regeneration off: only the effect.
+        let mut off = inputs(19, 5.0, 10.0);
         off.natural_regeneration = false;
-        assert_eq!(meal_gain(&off).unwrap(), 0.0);
+        assert_eq!(meal_health(&off, &golden), 4.0);
+        // Food below 18 after eating: no natural regeneration.
+        assert_eq!(meal_health(&inputs(2, 0.0, 10.0), &apple()), 0.0);
     }
 
     #[test]
-    fn overlay_respects_the_switches_and_the_mount() {
+    fn the_overlay_follows_the_held_food() {
         let b = bars();
-        let i = inputs(10, 3.0, 10.0, Some(APPLE));
-        let all = overlay(&Options::default(), &i, &b, Some(2.0));
-        assert!(!all.under.is_empty() || i.exhaustion == 0.0);
-        assert!(!all.over.is_empty());
-        let none = overlay(
-            &Options {
-                restored: false,
-                saturation: false,
-                exhaustion: false,
-                health: false,
-            },
-            &i,
-            &b,
-            Some(2.0),
-        );
-        assert_eq!(none, Overlay::default());
-        // No food icons (a ridden mount shows its hearts): nothing to overlay.
-        let mounted = BarPositions {
-            food: Vec::new(),
-            hearts: b.hearts.clone(),
+        let i = inputs(10, 3.0, 10.0);
+        let nothing = overlay(&Options::default(), &i, &b, None, 0.5);
+        assert!(!nothing.holding_food);
+        // The current saturation and the exhaustion strip are always there.
+        assert_eq!(nothing.under.len(), 1);
+        assert_eq!(nothing.over.len(), 2);
+        let eating = overlay(&Options::default(), &i, &b, Some(&apple()), 0.5);
+        assert!(eating.holding_food);
+        assert!(eating.over.len() > nothing.over.len());
+        // Switched off: nothing.
+        let off = Options {
+            restored: false,
+            saturation: false,
+            exhaustion: false,
+            health: false,
+            offhand: false,
         };
+        let none = overlay(&off, &i, &b, Some(&apple()), 0.5);
+        assert!(none.under.is_empty() && none.over.is_empty());
+        // At 18 food or more the health estimate is not shown.
+        let full = overlay(&Options::default(), &inputs(19, 0.0, 10.0), &b, Some(&apple()), 0.5);
+        let hearts = full
+            .over
+            .iter()
+            .filter(|d| matches!(d, GuiDraw::Sprite { sprite, .. } if sprite.starts_with("hud/heart")))
+            .count();
+        assert_eq!(hearts, 0);
+        // Peaceful or poisoned: neither.
+        let mut p = inputs(5, 0.0, 10.0);
+        p.peaceful = true;
+        assert!(!should_show_estimated_health(&p, &b));
+        p.peaceful = false;
+        p.poisoned = true;
+        assert!(!should_show_estimated_health(&p, &b));
+        let _ = HeartKind::Normal;
+    }
+
+    #[test]
+    fn rotten_food_is_food_with_a_harmful_effect() {
+        assert!(harmful_effect("minecraft:hunger"));
+        assert!(harmful_effect("poison"));
+        assert!(!harmful_effect("minecraft:regeneration"));
+        assert!(!harmful_effect("minecraft:absorption"));
+    }
+
+    #[test]
+    fn the_tooltip_row_has_the_mods_size_and_icons() {
+        // An apple: 4 hunger, 2.4 saturation: 2 icons, 2 saturation icons...
+        let row = TooltipRow::new(4, 2.4, 4, 2.4, false).unwrap();
+        let measure = |s: &str| s.len() as f32 * 6.0;
+        assert_eq!(row.height(), 20);
+        assert_eq!(row.width(&measure), 18.0);
+        let d = row.draws(10, 20);
+        // Two hunger icons (empty, default, modified each: 3 sprites)...
+        let sprites = d.iter().filter(|d| matches!(d, GuiDraw::Sprite { .. })).count();
+        assert_eq!(sprites, 6);
+        // ...and two saturation blits: 2.4 is one and a fifth icons.
+        let blits: Vec<_> = d.iter().filter_map(|d| match d {
+            GuiDraw::Blit { .. } => Some(blit_at(d)),
+            _ => None,
+        }).collect();
+        assert_eq!(blits.len(), 2);
+        // The right icon first: the second saturation icon is drawn first.
+        assert_eq!(blits[0].1, 30);
+        assert_eq!(blits[0].2[1], 27.0);
+        // Nothing to eat: no row.
+        assert!(TooltipRow::new(0, 0.0, 0, 0.0, false).is_none());
+        // More than ten bars of hunger collapse to one with a count.
+        let big = TooltipRow::new(30, 0.5, 30, 0.5, false).unwrap();
+        assert_eq!(big.hunger_text.as_deref(), Some("x15"));
+        assert_eq!(big.width(&measure), 9.0 + 18.0);
+        // No saturation: the "x0" text.
+        let none = TooltipRow::new(4, 0.0, 4, 0.0, false).unwrap();
+        assert_eq!(none.saturation_text.as_deref(), Some("x0"));
+    }
+
+    #[test]
+    fn a_marker_line_stands_for_the_row() {
+        let line = TooltipRow::marker(6, 7.2, true).unwrap();
+        assert!(line.starts_with('\u{1}'));
         assert_eq!(
-            overlay(&Options::default(), &i, &mounted, Some(2.0)),
-            Overlay::default()
+            TooltipRow::from_marker(&line),
+            TooltipRow::new(6, 7.2, 6, 7.2, true)
         );
+        assert!(TooltipRow::marker(0, 1.0, false).is_none());
+        assert!(TooltipRow::from_marker("Iron Ingot").is_none());
     }
 
     #[test]
-    fn health_preview_covers_the_gained_halves() {
-        let b = bars();
-        // 7 health -> 10: heart 3 goes from half to full and heart 4 fills.
-        let draws = health_preview(&b, 7.0, 3.0, HeartKind::Normal, false, 0.5);
-        assert_eq!(draws.len(), 2);
-        // 7 -> 9 ends on a half heart.
-        let draws = health_preview(&b, 7.0, 2.0, HeartKind::Normal, false, 0.5);
-        let GuiDraw::Sprite { sprite, .. } = &draws[1] else {
-            panic!("a sprite");
-        };
-        assert_eq!(sprite, "hud/heart/half");
-        assert!(health_preview(&b, 7.0, 0.0, HeartKind::Normal, false, 0.5).is_empty());
+    fn outlines_tell_what_a_mod_changed() {
+        assert_eq!(Outline::get(-2, 4, 0), Outline::Negative);
+        assert_eq!(Outline::get(6, 4, 4), Outline::Extra);
+        assert_eq!(Outline::get(4, 4, 2), Outline::Normal);
+        assert_eq!(Outline::get(3, 6, 2), Outline::Partial);
+        assert_eq!(Outline::get(2, 6, 4), Outline::Missing);
     }
 
     #[test]
-    fn tooltip_notes_waste() {
-        let lines = tooltip_lines(APPLE, 10);
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].0, "Hunger: +4");
-        assert_eq!(lines[1].0, "Saturation: +2.4");
-        let lines = tooltip_lines(APPLE, 18);
-        assert_eq!(lines.len(), 3);
-        assert!(lines[2].0.contains("Wastes 2"));
-    }
-
-    #[test]
-    fn the_flash_stays_in_range() {
-        for t in 0..200 {
-            let a = flash(t);
-            assert!((0.0..=MAX_FLASH).contains(&a));
-        }
+    fn the_debug_line_formats_like_java() {
+        assert_eq!(debug_line(20, 5.0, 1.234), "hunger: 20, sat: 5, exh: 1.23/4");
+        assert_eq!(debug_line(7, 2.5, 0.0), "hunger: 7, sat: 2.5, exh: 0.00/4");
+        // Ties go to the even digit, as Java's HALF_EVEN does.
+        assert_eq!(up_to_two(0.125), "0.12");
     }
 }

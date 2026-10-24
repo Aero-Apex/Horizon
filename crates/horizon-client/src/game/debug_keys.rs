@@ -327,11 +327,11 @@ impl Game<'_> {
                 let food = &p.health.food;
                 d.group(
                     "food",
-                    horizon_client::appleskin::debug_lines(
+                    [horizon_client::appleskin::debug_line(
                         food.food,
                         food.saturation,
                         food.exhaustion,
-                    ),
+                    )],
                 );
             }
         }
