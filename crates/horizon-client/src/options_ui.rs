@@ -882,6 +882,8 @@ pub enum Page {
     /// AI Agent: agent control on or off, whether an agent is connected, the connection details.
     Agent,
 }
+/// Controlling's Key Binds filters, in the order its button cycles them.
+const KEY_FILTERS: [&str; 4] = ["All", "Conflicts", "Unbound", "Changed"];
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
     None,
@@ -889,6 +891,8 @@ enum Act {
     Done,
     Cycle(Opt),
     Extra(crate::extras::Item),
+    /// Controlling: the Key Binds list's next filter.
+    KeyFilter,
     Key(&'static str),
     ResetKey(&'static str),
     ResetKeys,
@@ -1008,6 +1012,9 @@ pub struct OptionsUi {
     language_choice: Option<String>,
     language_search: ui::EditBox,
     pub(crate) settings_search: ui::EditBox,
+    /// Controlling's Key Binds filter: all, conflicts, unbound or changed
+    /// keys (`KEY_FILTERS`).
+    key_filter: usize,
     /// Packs: the packs found and the selection the screen opens with.
     pub pack_infos: Vec<crate::pack_screen::PackInfo>,
     pub pack_selection: Vec<String>,
@@ -1054,6 +1061,7 @@ impl Default for OptionsUi {
             language_choice: None,
             language_search: search,
             settings_search,
+            key_filter: 0,
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
@@ -1183,6 +1191,7 @@ impl OptionsUi {
         if matches!(page, Page::Video | Page::Controls | Page::KeyBinds) {
             self.settings_search.set_value("");
             self.settings_search.focused = false;
+            self.key_filter = 0;
         }
         if page == Page::Language {
             self.language_choice = None;
@@ -1902,8 +1911,42 @@ impl OptionsUi {
                 let mut mappings: Vec<(&str, &str)> =
                     MAPPINGS.iter().map(|(n, _, c)| (*n, *c)).collect();
                 let query = self.settings_search.value.to_lowercase();
-                mappings.retain(|(name, _)| {
-                    query.is_empty() || lang::get(name).to_lowercase().contains(&query)
+                // Controlling: the search also finds keys and categories, and
+                // a button keeps only conflicts, unbound or changed keys.
+                let controlling = s.extras.controlling;
+                if controlling {
+                    out.push(Widget {
+                        x: cx + 104.0,
+                        y: 17.0,
+                        w: 96.0,
+                        h: 15.0,
+                        kind: WKind::Button {
+                            label: Text::literal(format!("Show: {}", KEY_FILTERS[self.key_filter])),
+                            active: true,
+                            act: Act::KeyFilter,
+                        },
+                        list: false,
+                    });
+                }
+                let filter = if controlling { self.key_filter } else { 0 };
+                mappings.retain(|(name, category)| {
+                    let by_name = query.is_empty() || lang::get(name).to_lowercase().contains(&query);
+                    let by_key = controlling
+                        && !query.is_empty()
+                        && (keybinds::display_name(s.keys.get(name))
+                            .plain()
+                            .to_lowercase()
+                            .contains(&query)
+                            || lang::get(&format!("key.category.minecraft.{category}"))
+                                .to_lowercase()
+                                .contains(&query));
+                    let shown = match filter {
+                        1 => !s.keys.conflicts(name).is_empty(),
+                        2 => s.keys.get(name) == "key.keyboard.unknown",
+                        3 => !s.keys.is_default(name),
+                        _ => true,
+                    };
+                    (by_name || by_key) && shown
                 });
                 mappings.sort_by(|a, b| {
                     let ca = CATEGORIES.iter().position(|c| *c == a.1).unwrap_or(99);
@@ -2819,6 +2862,10 @@ impl OptionsUi {
                                 item.cycle(&mut s.extras, right);
                                 events.push(Event::Changed);
                             }
+                        }
+                        Act::KeyFilter => {
+                            self.key_filter = (self.key_filter + 1) % KEY_FILTERS.len();
+                            self.scroll = 0.0;
                         }
                         Act::Key(name) => self.selected_key = Some(name),
                         Act::ResetKey(name) => {

@@ -103,6 +103,34 @@ pub struct Extras {
     pub mouse_tweaks: bool,
     /// With them, the wheel over a slot moves its items one at a time.
     pub mouse_tweaks_wheel: bool,
+    /// AppleSkin: what food would do, drawn on the food and health bars, in
+    /// tooltips and on F3 (`appleskin`).
+    pub appleskin: bool,
+    /// The flashing hunger and saturation preview for the food in hand.
+    pub appleskin_restored: bool,
+    /// The golden saturation outlines on the food icons.
+    pub appleskin_saturation: bool,
+    /// The exhaustion strip under the food icons.
+    pub appleskin_exhaustion: bool,
+    /// The flashing hearts food would regenerate.
+    pub appleskin_health: bool,
+    /// Hunger and saturation values in food tooltips.
+    pub appleskin_tooltips: bool,
+    /// The food numbers on F3.
+    pub appleskin_debug: bool,
+    /// Jade: a box at the top of the screen for the block or mob under the
+    /// crosshair (`jade`).
+    pub jade: bool,
+    /// Whether the held tool can harvest the block, and which tool does.
+    pub jade_harvest: bool,
+    /// Crop growth, redstone power and the like under the name.
+    pub jade_details: bool,
+    /// JEI: every item listed beside the inventory, with a search box, and
+    /// recipe windows for what makes an item and what uses it (`jei`).
+    pub jei: bool,
+    /// Controlling: the Key Binds search also finds keys and categories, and
+    /// a button filters to conflicts, unbound or changed keys.
+    pub controlling: bool,
     /// Sort buttons on the inventory and chest-like containers.
     pub sort: bool,
     /// A vanilla key name: sorts the part under the cursor.
@@ -138,6 +166,18 @@ impl Default for Extras {
             auto_reconnect: false,
             mouse_tweaks: false,
             mouse_tweaks_wheel: true,
+            appleskin: false,
+            appleskin_restored: true,
+            appleskin_saturation: true,
+            appleskin_exhaustion: true,
+            appleskin_health: true,
+            appleskin_tooltips: true,
+            appleskin_debug: true,
+            jade: false,
+            jade_harvest: true,
+            jade_details: true,
+            jei: false,
+            controlling: false,
             sort: false,
             sort_key: "key.keyboard.unknown".into(),
             no_ai: false,
@@ -203,6 +243,18 @@ impl Extras {
                 "autoReconnect" => e.auto_reconnect = flag(e.auto_reconnect),
                 "mouseTweaks" => e.mouse_tweaks = flag(e.mouse_tweaks),
                 "mouseTweaksWheel" => e.mouse_tweaks_wheel = flag(e.mouse_tweaks_wheel),
+                "appleSkin" => e.appleskin = flag(e.appleskin),
+                "appleSkinRestored" => e.appleskin_restored = flag(e.appleskin_restored),
+                "appleSkinSaturation" => e.appleskin_saturation = flag(e.appleskin_saturation),
+                "appleSkinExhaustion" => e.appleskin_exhaustion = flag(e.appleskin_exhaustion),
+                "appleSkinHealth" => e.appleskin_health = flag(e.appleskin_health),
+                "appleSkinTooltips" => e.appleskin_tooltips = flag(e.appleskin_tooltips),
+                "appleSkinDebug" => e.appleskin_debug = flag(e.appleskin_debug),
+                "jade" => e.jade = flag(e.jade),
+                "jadeHarvest" => e.jade_harvest = flag(e.jade_harvest),
+                "jadeDetails" => e.jade_details = flag(e.jade_details),
+                "jei" => e.jei = flag(e.jei),
+                "controlling" => e.controlling = flag(e.controlling),
                 "sort" => e.sort = flag(e.sort),
                 "sortKey" if value.starts_with("key.") => e.sort_key = value.to_owned(),
                 horizon_core::no_ai::KEY => e.no_ai = flag(e.no_ai),
@@ -214,7 +266,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\n",
+            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nappleSkin:{}\nappleSkinRestored:{}\nappleSkinSaturation:{}\nappleSkinExhaustion:{}\nappleSkinHealth:{}\nappleSkinTooltips:{}\nappleSkinDebug:{}\njade:{}\njadeHarvest:{}\njadeDetails:{}\njei:{}\ncontrolling:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\n",
             bool_text(self.fullbright),
             bool_text(self.dynamic_lights),
             bool_text(self.zoom),
@@ -241,6 +293,18 @@ impl Extras {
             bool_text(self.auto_reconnect),
             bool_text(self.mouse_tweaks),
             bool_text(self.mouse_tweaks_wheel),
+            bool_text(self.appleskin),
+            bool_text(self.appleskin_restored),
+            bool_text(self.appleskin_saturation),
+            bool_text(self.appleskin_exhaustion),
+            bool_text(self.appleskin_health),
+            bool_text(self.appleskin_tooltips),
+            bool_text(self.appleskin_debug),
+            bool_text(self.jade),
+            bool_text(self.jade_harvest),
+            bool_text(self.jade_details),
+            bool_text(self.jei),
+            bool_text(self.controlling),
             bool_text(self.sort),
             self.sort_key,
             horizon_core::no_ai::KEY,
@@ -461,6 +525,18 @@ pub enum Item {
     AutoReconnect,
     MouseTweaks,
     MouseTweaksWheel,
+    AppleSkin,
+    AppleSkinRestored,
+    AppleSkinSaturation,
+    AppleSkinExhaustion,
+    AppleSkinHealth,
+    AppleSkinTooltips,
+    AppleSkinDebug,
+    Jade,
+    JadeHarvest,
+    JadeDetails,
+    Jei,
+    Controlling,
     Sort,
     SortKey,
     /// Not on the Extras page: Horizon Settings shows No AI, its AI Agent page Agent Control.
@@ -495,6 +571,22 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(Keystrokes),
         Ok(KeystrokesCorner),
         Ok(KeystrokesCps),
+        Err("AppleSkin"),
+        Ok(AppleSkin),
+        Ok(AppleSkinRestored),
+        Ok(AppleSkinSaturation),
+        Ok(AppleSkinExhaustion),
+        Ok(AppleSkinHealth),
+        Ok(AppleSkinTooltips),
+        Ok(AppleSkinDebug),
+        Err("Jade"),
+        Ok(Jade),
+        Ok(JadeHarvest),
+        Ok(JadeDetails),
+        Err("Recipes"),
+        Ok(Jei),
+        Err("Controls"),
+        Ok(Controlling),
         Err("Inventory"),
         Ok(MouseTweaks),
         Ok(MouseTweaksWheel),
@@ -539,6 +631,18 @@ impl Item {
             Item::AutoReconnect => "Auto-reconnect",
             Item::MouseTweaks => "Mouse Tweaks controls",
             Item::MouseTweaksWheel => "Scroll wheel moves items",
+            Item::AppleSkin => "AppleSkin",
+            Item::AppleSkinRestored => "Hunger preview",
+            Item::AppleSkinSaturation => "Saturation outlines",
+            Item::AppleSkinExhaustion => "Exhaustion strip",
+            Item::AppleSkinHealth => "Health preview",
+            Item::AppleSkinTooltips => "Food values in tooltips",
+            Item::AppleSkinDebug => "Food values on F3",
+            Item::Jade => "Jade",
+            Item::JadeHarvest => "Harvest info",
+            Item::JadeDetails => "Details",
+            Item::Jei => "Item list and recipes (JEI)",
+            Item::Controlling => "Controlling",
             Item::Sort => "Sort buttons",
             Item::SortKey => "Sort key",
             Item::FpsLows => "Minimum and 1% low",
@@ -557,9 +661,12 @@ impl Item {
             FpsCorner | FpsLows => Fps,
             KeystrokesCorner | KeystrokesCps => Keystrokes,
             MouseTweaksWheel => MouseTweaks,
+            AppleSkinRestored | AppleSkinSaturation | AppleSkinExhaustion | AppleSkinHealth
+            | AppleSkinTooltips | AppleSkinDebug => AppleSkin,
+            JadeHarvest | JadeDetails => Jade,
             SortKey => Sort,
             Fullbright | DynamicLights | Zoom | Minimap | Fps | Keystrokes | MouseTweaks | Sort
-            | AutoReconnect | NoAi | AgentControl => {
+            | AppleSkin | Jade | Jei | Controlling | AutoReconnect | NoAi | AgentControl => {
                 return None;
             }
         })
@@ -595,6 +702,34 @@ impl Item {
             Item::MouseTweaksWheel => {
                 "Down sends one item of the slot to the other side, up brings one back."
             }
+            Item::AppleSkin => {
+                "Shows what food would do: on the food and health bars, in tooltips and on F3. A rewrite of the Java mod."
+            }
+            Item::AppleSkinRestored => {
+                "Holding food, the hunger and saturation it would give flash on the food bar."
+            }
+            Item::AppleSkinSaturation => "Golden outlines on the food icons show your saturation.",
+            Item::AppleSkinExhaustion => {
+                "A strip under the food icons grows as exhaustion builds toward costing a point."
+            }
+            Item::AppleSkinHealth => {
+                "Holding food, the hearts natural regeneration would give flash on the health bar."
+            }
+            Item::AppleSkinTooltips => "Food items list the hunger and saturation they give.",
+            Item::AppleSkinDebug => "Hunger, saturation and exhaustion on the F3 screen.",
+            Item::Jade => {
+                "A box at the top of the screen names the block or mob under your crosshair, with its icon, health and details. A rewrite of the Java mod."
+            }
+            Item::JadeHarvest => {
+                "Says which tool a block needs and whether the one in your hand can harvest it."
+            }
+            Item::JadeDetails => "Crop growth, redstone power and similar state, under the name.",
+            Item::Jei => {
+                "Lists every item beside the inventory with a search box. Click an item for how it is made, right-click for what uses it; R and U do the same over any item. A rewrite of the Java mod."
+            }
+            Item::Controlling => {
+                "Key Binds search also finds keys and categories, and a button shows only conflicts, unbound or changed keys."
+            }
             Item::Sort => {
                 "Sorts the inventory, chests, barrels, ender chests and shulker boxes in creative tab order, merging stacks."
             }
@@ -617,7 +752,13 @@ impl Item {
         match self {
             Item::Fullbright | Item::Zoom | Item::Fps | Item::Keystrokes => Some(Cost::None),
             Item::Minimap | Item::DynamicLights => Some(Cost::Low),
-            Item::AutoReconnect | Item::MouseTweaks | Item::Sort => Some(Cost::None),
+            Item::AutoReconnect
+            | Item::MouseTweaks
+            | Item::Sort
+            | Item::AppleSkin
+            | Item::Jade
+            | Item::Jei
+            | Item::Controlling => Some(Cost::None),
             _ => None,
         }
     }
@@ -638,6 +779,18 @@ impl Item {
             Item::AutoReconnect => e.auto_reconnect,
             Item::MouseTweaks => e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel,
+            Item::AppleSkin => e.appleskin,
+            Item::AppleSkinRestored => e.appleskin_restored,
+            Item::AppleSkinSaturation => e.appleskin_saturation,
+            Item::AppleSkinExhaustion => e.appleskin_exhaustion,
+            Item::AppleSkinHealth => e.appleskin_health,
+            Item::AppleSkinTooltips => e.appleskin_tooltips,
+            Item::AppleSkinDebug => e.appleskin_debug,
+            Item::Jade => e.jade,
+            Item::JadeHarvest => e.jade_harvest,
+            Item::JadeDetails => e.jade_details,
+            Item::Jei => e.jei,
+            Item::Controlling => e.controlling,
             Item::Sort => e.sort,
             Item::NoAi => e.no_ai,
             Item::AgentControl => e.agent_control,
@@ -688,6 +841,18 @@ impl Item {
             Item::AutoReconnect => e.auto_reconnect = !e.auto_reconnect,
             Item::MouseTweaks => e.mouse_tweaks = !e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel = !e.mouse_tweaks_wheel,
+            Item::AppleSkin => e.appleskin = !e.appleskin,
+            Item::AppleSkinRestored => e.appleskin_restored = !e.appleskin_restored,
+            Item::AppleSkinSaturation => e.appleskin_saturation = !e.appleskin_saturation,
+            Item::AppleSkinExhaustion => e.appleskin_exhaustion = !e.appleskin_exhaustion,
+            Item::AppleSkinHealth => e.appleskin_health = !e.appleskin_health,
+            Item::AppleSkinTooltips => e.appleskin_tooltips = !e.appleskin_tooltips,
+            Item::AppleSkinDebug => e.appleskin_debug = !e.appleskin_debug,
+            Item::Jade => e.jade = !e.jade,
+            Item::JadeHarvest => e.jade_harvest = !e.jade_harvest,
+            Item::JadeDetails => e.jade_details = !e.jade_details,
+            Item::Jei => e.jei = !e.jei,
+            Item::Controlling => e.controlling = !e.controlling,
             Item::Sort => e.sort = !e.sort,
             Item::MinimapCorner => e.minimap_corner = next(&Corner::ALL, e.minimap_corner, back),
             Item::MinimapSize => {
@@ -744,6 +909,9 @@ mod tests {
         e.auto_reconnect = true;
         e.mouse_tweaks = true;
         e.mouse_tweaks_wheel = false;
+        e.appleskin = true;
+        e.appleskin_restored = false;
+        e.appleskin_debug = false;
         e.sort = true;
         e.sort_key = "key.keyboard.r".into();
         assert_eq!(Extras::parse(&e.serialize()), e);

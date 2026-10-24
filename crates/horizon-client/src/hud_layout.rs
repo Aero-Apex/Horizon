@@ -477,6 +477,17 @@ pub enum HeartKind {
     Frozen,
 }
 
+/// Where the last `HealthHud::layout` drew the heart containers and the food
+/// icons, jitter included (the top-left of each 9 x 9 icon), for overlays that
+/// must sit exactly on them (`appleskin`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BarPositions {
+    /// Food icons, 0 = the rightmost; empty while a mount's hearts replace the bar.
+    pub food: Vec<(i32, i32)>,
+    /// Heart containers, 0 = the leftmost.
+    pub hearts: Vec<(i32, i32)>,
+}
+
 /// State kept between frames (`Hud.lastHealth`, `displayHealth`, ...).
 #[derive(Clone, Debug, Default)]
 pub struct HealthHud {
@@ -485,6 +496,8 @@ pub struct HealthHud {
     /// `Util.getMillis()` of the last health change.
     pub last_health_time: i64,
     pub health_blink_time: i64,
+    /// Where the bars were drawn by the last `layout`.
+    pub bars: BarPositions,
 }
 
 pub struct HealthInputs {
@@ -667,6 +680,8 @@ impl HealthHud {
         }
         let containers = f64::from(max_health / 2.0).ceil() as i32;
         let absorb_containers = (f64::from(absorption) / 2.0).ceil() as i32;
+        let mut hearts = vec![(0, 0); containers.max(0) as usize];
+        let mut food_row = Vec::new();
         for c in (0..containers + absorb_containers).rev() {
             let (row, column) = (c / 10, c % 10);
             let x = x_left + column * 8;
@@ -676,6 +691,9 @@ impl HealthHud {
             }
             if c < containers && c == offset_index {
                 y -= 2;
+            }
+            if let Some(slot) = hearts.get_mut(c as usize) {
+                *slot = (x, y);
             }
             out.push(sprite(
                 heart(None, false, i.hardcore, false, blink),
@@ -730,6 +748,7 @@ impl HealthHud {
                     y += next(3) - 1;
                 }
                 let x = x_right - n * 8 - 9;
+                food_row.push((x, y));
                 out.push(sprite(empty, x, y, 9, 9));
                 if n * 2 + 1 < i.food {
                     out.push(sprite(full, x, y, 9, 9));
@@ -767,6 +786,10 @@ impl HealthHud {
                 }
             }
         }
+        self.bars = BarPositions {
+            food: food_row,
+            hearts,
+        };
         out
     }
 }

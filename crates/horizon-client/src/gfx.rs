@@ -4343,7 +4343,9 @@ impl Renderer {
             }
             self.weather.draw(&mut pass, &self.entity_group);
             pass.set_bind_group(0, &self.group, &[]);
-            if crumbling_quads > 0 {
+            // A Java pack draws the terrain after this pass: its cracks go over
+            // the pack's picture instead (below).
+            if crumbling_quads > 0 && !java_terrain {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -4475,7 +4477,7 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if translucent_crumbling_quads > 0 {
+            if translucent_crumbling_quads > 0 && !java_terrain {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -4577,6 +4579,38 @@ impl Renderer {
             self.world_post
                 .finish_with(&mut encoder, &view_target, output);
             self.pack = Some(stages);
+            // Block breaking over the pack's terrain, tested against the depth
+            // its terrain program left (the world's cracks are drawn before it).
+            let cracks = crumbling_quads + translucent_crumbling_quads;
+            if java_terrain && cracks > 0 && size == [self.config.width, self.config.height] {
+                let attachments = [Some(wgpu::RenderPassColorAttachment {
+                    view: &view_target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })];
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Block breaking over a Java pack"),
+                    color_attachments: &attachments,
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+                pass.set_pipeline(&self.crumbling_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(0..cracks * 6, (entity_quads * 4) as i32, 0..1);
+            }
         } else if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
         }

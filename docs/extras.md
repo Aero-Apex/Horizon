@@ -156,6 +156,65 @@ and the container screen tests are unchanged).
   server accepts it; a unit test replays the planned clicks through the menu
   engine on random chests.
 
+### AppleSkin (`appleSkin`, default off)
+A rewrite of the Java mod (public domain) for this client's own HUD. Sub-switches
+(all on with the extra): `appleSkinRestored`, `appleSkinSaturation`,
+`appleSkinExhaustion`, `appleSkinHealth`, `appleSkinTooltips`, `appleSkinDebug`.
+- **Saturation**: a golden outline on each food icon, filled from the bottom in
+  quarters as saturation covers the icon (10 icons, saturation / 2 each).
+- **Exhaustion**: a pale strip under the food icons growing from the right end
+  as exhaustion builds to 4 (the point where a unit of saturation or hunger goes).
+- **Food in hand** (only when the player could eat it, `Player.canEat`): the
+  hunger it would restore flashes on the food bar (vanilla's own food sprites at
+  a pulsing alpha, `sin(tick * 0.1)`, at most 0.65), the saturation it would add
+  flashes as outlines, and the hearts natural regeneration would then give flash
+  on the health bar.
+- The heart estimate runs vanilla's `FoodData.tick` forward on a stand-in world
+  (health, difficulty, the natural regeneration rule), so it follows vanilla's
+  rules exactly; it reruns only when the food state or health changes.
+- Everything sits on the icons `HealthHud::layout` drew that frame
+  (`BarPositions`), so food jitter, the regeneration wobble and extra heart rows
+  are followed. Mounted, the food bar is replaced by the mount's hearts and
+  nothing is drawn.
+- **Tooltips**: food items list `Hunger: +N` and `Saturation: +S`, and what the
+  bar cannot hold. **F3**: `hunger, saturation, exhaustion`.
+- Logic and tests: `appleskin.rs`; the game side `game/appleskin.rs`.
+
+### Jade (`jade`, default off; `jadeHarvest` and `jadeDetails`, on)
+A rewrite of the Java mod: a box at the top of the screen for the block or mob
+under the crosshair.
+- The block or mob's icon (the block item, or the mob's spawn egg), its name from
+  the language files, and the owner on the last line (`Minecraft`, or a mod's
+  name) in blue italics.
+- Mobs: their health as hearts (up to ten, scaled for bigger pools).
+- Blocks: crop growth, redstone power, repeater delay, comparator mode, note
+  block note and instrument, composter, honey and cauldron levels, farmland
+  moisture; `Unbreakable` for bedrock; which tool breaks it best and whether the
+  held item can harvest it (`Items::correct_for_drops`).
+- A green bar under the box shows how far the block being dug has got.
+- Logic and tests: `jade.rs`; the game side `game/jade.rs`.
+
+### JEI (`jei`, default off)
+A rewrite of the Java mod: on the inventory, container and creative screens, an
+item list beside the menu and a recipe window.
+- The list is every creative item, paged, searched by the box under it with the
+  creative screen's own search (item names, `#tag`).
+- Click an item for how it is made, right-click for what uses it; R and U do the
+  same over any item (the list, the window, the menu's own slots); Backspace goes
+  back; Escape leaves the search box, then closes the window; the wheel turns
+  pages, or steps through recipes in the window.
+- The window shows crafting (shaped recipes keep their grid, shapeless ones fill
+  it in order), smelting, blasting, smoking, campfire cooking, stonecutting,
+  smithing and transmute recipes, with ingredient tags cycling through their
+  items each second. Items in the window can be clicked too.
+- Recipes come from the prepared data pack (`recipe_table.rs`, read once).
+- Logic and tests: `jei.rs`; the game side `game/jei.rs`.
+
+### Controlling (`controlling`, default off)
+A rewrite of the Java mod for the Key Binds page: the search also matches the
+key's name (`shift`, `R`) and the category, and a button next to the search box
+cycles Show: All, Conflicts, Unbound, Changed.
+
 ## Shared rules
 
 - All extras are hidden with F1 and drawn in the HUD layer: under screens, over

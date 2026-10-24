@@ -1835,6 +1835,25 @@ impl Game<'_> {
                 lines.push((self.translate(key, fallback), rgba(255, 85, 85, 255)));
             }
         }
+        // AppleSkin: what eating it gives, and what the bar cannot hold.
+        let extras = &self.settings.extras;
+        if extras.appleskin
+            && extras.appleskin_tooltips
+            && let Some(info) = self.res.items().get(&stack.item)
+            && let Some((nutrition, saturation)) = info.food
+        {
+            let food = self.player.as_ref().map_or(0, |p| p.health.food.food);
+            let meal = horizon_client::appleskin::Meal {
+                nutrition: nutrition as i32,
+                saturation,
+            };
+            for (text, rgb) in horizon_client::appleskin::tooltip_lines(meal, food) {
+                lines.push((
+                    text,
+                    rgba((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, 255),
+                ));
+            }
+        }
         lines
     }
     /// Menu state for the control socket.
@@ -1935,7 +1954,8 @@ impl Game<'_> {
     }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.
     pub(super) fn draw_slot_tooltip(&mut self, batch: &mut HudBatch) {
-        if self.carried.is_some() {
+        // JEI's recipe window is over the menu: its slots show no tooltip.
+        if self.carried.is_some() || self.jei_view_open() {
             return;
         }
         let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) else {

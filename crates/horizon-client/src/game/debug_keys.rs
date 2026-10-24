@@ -322,6 +322,18 @@ impl Game<'_> {
                 d.group("position", lines);
             }
             d.group("position", [section]);
+            // AppleSkin's food numbers.
+            if self.settings.extras.appleskin && self.settings.extras.appleskin_debug {
+                let food = &p.health.food;
+                d.group(
+                    "food",
+                    horizon_client::appleskin::debug_lines(
+                        food.food,
+                        food.saturation,
+                        food.exhaustion,
+                    ),
+                );
+            }
         }
         // simple_performance_impactors.
         let s = &self.settings;

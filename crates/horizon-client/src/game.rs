@@ -5,7 +5,10 @@ mod advancements_screen;
 mod agent;
 mod agent_settings;
 mod allays;
+mod appleskin;
 mod armor_stands;
+mod jade;
+mod jei;
 mod banners;
 mod beacon;
 mod beehives;
@@ -1240,6 +1243,10 @@ struct Game<'a> {
     fps_at: Instant,
     ticks: u64,
     health_hud: hud_layout::HealthHud,
+    /// AppleSkin's last regeneration estimate (`appleskin::GainCache`).
+    appleskin_cache: std::cell::RefCell<horizon_client::appleskin::GainCache>,
+    /// JEI's item list and recipe window (`game/jei.rs`).
+    jei: jei::JeiUi,
     /// What ends the game with an error; kept as it is, so main can tell a debug crash.
     error: Option<Box<dyn std::error::Error>>,
     message: Option<(String, Instant)>,
@@ -4963,7 +4970,20 @@ impl Game<'_> {
                     under_water,
                     vehicle_hearts,
                 };
-                let draws = self.health_hud.layout(&inputs, wi, hi);
+                let mut draws = self.health_hud.layout(&inputs, wi, hi);
+                // AppleSkin: the exhaustion strip goes under the food icons,
+                // the rest over the bars.
+                if let Some(overlay) = self.appleskin_overlay(&inputs) {
+                    let at = draws
+                        .iter()
+                        .position(|d| {
+                            matches!(d, hud_layout::GuiDraw::Sprite { sprite, .. }
+                                if sprite.starts_with("hud/food_empty"))
+                        })
+                        .unwrap_or(draws.len());
+                    draws.splice(at..at, overlay.under);
+                    draws.extend(overlay.over);
+                }
                 hud_layout::paint(&mut batch, atlas, &draws);
             }
             if contextual == ContextualBar::Locator {
@@ -4973,6 +4993,8 @@ impl Game<'_> {
             if !spectator {
                 self.draw_selected_name(&mut batch, !self.creative);
             }
+            // Jade: the block or mob under the crosshair.
+            self.draw_jade(&mut batch);
         }
         // Hud.extractSleepOverlay: over all health/food bars, under titles and chat.
         let draws = hud_overlays::sleep_overlay(wi, hi, self.sleep_timer as i32);
@@ -5019,9 +5041,11 @@ impl Game<'_> {
             Screen::CommandBlock => self.draw_command_block(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
+                self.draw_jei_screen(&mut batch);
             }
             Screen::Creative => {
                 self.draw_creative(&mut batch);
+                self.draw_jei_screen(&mut batch);
             }
             Screen::Chat => self.draw_chat_screen(&mut batch),
             Screen::Playing | Screen::Options | Screen::Win => {}
@@ -10331,6 +10355,12 @@ impl Game<'_> {
             }
             return Ok(());
         }
+        // JEI: Escape leaves its search box, then closes its window; R and U
+        // over an item show its recipes and uses, Backspace goes back. Before
+        // `remote_key`, which closes the screens on Escape itself.
+        if (key == KeyCode::Escape && self.jei_escape()) || self.jei_hover_key(key) {
+            return Ok(());
+        }
         if self.sort_key_press(key) {
             return Ok(());
         }
@@ -11013,11 +11043,14 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Options && d != 0.0 {
                         self.options_scroll(d);
                     }
-                    if self.screen == Screen::Creative && d != 0.0 {
+                    // JEI's list turns pages and its window steps through recipes.
+                    let jei_wheel = d != 0.0 && self.jei_wheel(d);
+                    if self.screen == Screen::Creative && d != 0.0 && !jei_wheel {
                         self.creative_screen.wheel(f64::from(d), &self.pack.names);
                     }
                     if self.screen == Screen::Inventory
                         && d != 0.0
+                        && !jei_wheel
                         && !self.tweak_scroll(d, self.inventory_target().0)
                     {
                         self.station_scroll(d);
@@ -11139,6 +11172,12 @@ impl ApplicationHandler for Game<'_> {
                     if pressed && self.sort_mouse_press(button) {
                         return Ok(());
                     }
+                    // JEI's item list and recipe window take their clicks first.
+                    if matches!(button, MouseButton::Left | MouseButton::Right)
+                        && self.jei_mouse(pressed, button == MouseButton::Right)
+                    {
+                        return Ok(());
+                    }
                     match self.screen {
                         Screen::Playing => {
                             if pressed && !self.captured {
@@ -11248,6 +11287,14 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.book.is_some() => {
                     self.book_key(&event)
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.jei_search_focused()
+                        && event.state == ElementState::Pressed
+                        && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
+                {
+                    // JEI's search box takes every key but Escape.
+                    self.jei_search_key(&event);
                 }
                 WindowEvent::KeyboardInput { event, .. }
                     if self.screen == Screen::Creative
@@ -11776,6 +11823,8 @@ impl<'a> Game<'a> {
             luminance: None,
             see_through_vertices: Vec::new(),
             health_hud: hud_layout::HealthHud::default(),
+            appleskin_cache: Default::default(),
+            jei: Default::default(),
             started: now,
             previous: now,
             last_input: now,

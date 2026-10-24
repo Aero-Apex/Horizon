@@ -3,7 +3,10 @@
 #![forbid(unsafe_code)]
 pub mod advancements;
 pub mod ambience;
+pub mod jade;
+pub mod jei;
 pub mod animate_tick;
+pub mod appleskin;
 pub mod arrows;
 pub mod assets;
 pub mod atlas_sources;
@@ -149,6 +152,7 @@ pub mod random_sequences;
 pub mod random_tick_sections;
 pub mod recipe_book;
 pub mod recipe_book_screen;
+pub mod recipe_table;
 pub mod reconnect;
 pub mod save;
 pub mod scoreboard;

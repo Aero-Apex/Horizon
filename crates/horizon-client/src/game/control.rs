@@ -536,6 +536,10 @@ impl Game<'_> {
                     return ok();
                 }
                 match self.screen {
+                    // JEI's search box, when it has the focus.
+                    Screen::Inventory | Screen::Creative if self.jei_search_focused() => {
+                        self.jei_type(text)
+                    }
                     Screen::Chat => self.chat_type(text),
                     Screen::CommandBlock => self.command_block_type(text),
                     Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
