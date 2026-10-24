@@ -590,11 +590,13 @@ impl Post {
         let Some((opaque, _)) = &t.opaque_depth else {
             return;
         };
+        let stamp = super::pass_times::stamp(encoder, "opaque depth copy");
         encoder.copy_texture_to_texture(
             t.depth_tex.as_image_copy(),
             opaque.as_image_copy(),
             t.depth_tex.size(),
         );
+        super::pass_times::stamp_end(encoder, stamp);
         t.opaque_captured = true;
     }
 
@@ -649,6 +651,7 @@ impl Post {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Horizon gbuffer"),
             color_attachments: &attachments,
+            timestamp_writes: super::pass_times::writes("gbuffer"),
             ..Default::default()
         });
         pass.set_pipeline(&self.gbuffer_pipeline);
@@ -744,6 +747,7 @@ impl Post {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Horizon post"),
             color_attachments: &attachments,
+            timestamp_writes: super::pass_times::writes("post"),
             ..Default::default()
         });
         pass.set_pipeline(if self.antialias {

@@ -196,9 +196,164 @@ struct Target {
     format: wgpu::TextureFormat,
     main: wgpu::Texture,
     alt: wgpu::Texture,
+    /// The base level of each side: what passes draw into.
     main_view: wgpu::TextureView,
     alt_view: wgpu::TextureView,
+    /// Every level of each side, for the passes that read it (the base
+    /// level's views when the target has no mipmaps).
+    main_sample: wgpu::TextureView,
+    alt_sample: wgpu::TextureView,
+    /// The steps that fill levels 1.. of each side, when some pass asks for
+    /// the target's mipmaps (`colortexNMipmapEnabled`).
+    mips: Option<MipChains>,
     clear: Option<wgpu::Color>,
+}
+
+/// The passes that make a target's mipmaps: level `n` from level `n - 1`.
+struct MipChains {
+    pipeline: wgpu::RenderPipeline,
+    main: Vec<MipStep>,
+    alt: Vec<MipStep>,
+}
+
+struct MipStep {
+    /// The level above, to sample.
+    group: wgpu::BindGroup,
+    /// This level, to draw.
+    dst: wgpu::TextureView,
+}
+
+/// How many levels a texture of this size has down to one texel.
+fn mip_levels(size: [u32; 2]) -> u32 {
+    32 - size[0].max(size[1]).max(1).leading_zeros()
+}
+
+/// `glGenerateMipmap`: each level is the average of 2 x 2 texels of the one
+/// above, which a bilinear tap at their shared corner gives.
+const MIP_SHADER: &str = r#"
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var smp: sampler;
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let uv = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4f(uv * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    let size = vec2f(textureDimensions(src, 0));
+    let dst = max(floor(size * 0.5), vec2f(1.0));
+    return textureSampleLevel(src, smp, p.xy / dst, 0.0);
+}
+"#;
+
+/// The pipeline that downsamples into a target of `format`.
+fn mip_pipeline(
+    device: &wgpu::Device,
+    common: &Common,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Java shader pack mipmaps"),
+        bind_group_layouts: &[Some(&common.mip_layout)],
+        ..Default::default()
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Java shader pack mipmaps"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &common.mip_module,
+            entry_point: Some("vs"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &common.mip_module,
+            entry_point: Some("fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(format.into())],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The steps that fill the levels of `texture` below its base.
+fn mip_steps(
+    device: &wgpu::Device,
+    common: &Common,
+    texture: &wgpu::Texture,
+    levels: u32,
+) -> Vec<MipStep> {
+    (1..levels)
+        .map(|level| {
+            let single = |base_mip_level| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    base_mip_level,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                })
+            };
+            let src = single(level - 1);
+            MipStep {
+                group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Java shader pack mipmaps"),
+                    layout: &common.mip_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&src),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&common.linear),
+                        },
+                    ],
+                }),
+                dst: single(level),
+            }
+        })
+        .collect()
+}
+
+/// Fills the mipmaps of one side of `target`.
+fn generate_mips(encoder: &mut wgpu::CommandEncoder, target: &Target, alt: bool) {
+    let Some(chains) = &target.mips else {
+        return;
+    };
+    for step in if alt { &chains.alt } else { &chains.main } {
+        let attachments = [Some(color_attachment(&step.dst, None))];
+        let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Java shader pack mipmaps"),
+            color_attachments: &attachments,
+            timestamp_writes: super::pass_times::writes("mipmaps"),
+            ..Default::default()
+        });
+        render.set_pipeline(&chains.pipeline);
+        render.set_bind_group(0, &step.group, &[]);
+        render.draw(0..3, 0..1);
+    }
+}
+
+/// Makes the mipmaps `pass` asks for, of the targets written since they were
+/// last made.
+fn pass_mips(
+    encoder: &mut wgpu::CommandEncoder,
+    pass: &PassGpu,
+    targets: &BTreeMap<u32, Target>,
+    dirty: &mut BTreeSet<u32>,
+) {
+    for &index in &pass.mipmapped {
+        if dirty.remove(&index)
+            && let Some(target) = targets.get(&index)
+        {
+            generate_mips(encoder, target, pass.reads_alt.contains(&index));
+        }
+    }
 }
 
 /// What a sampler of the pack reads.
@@ -280,6 +435,8 @@ struct PassGpu {
     attributes: Vec<usize>,
     draw_buffers: Vec<u32>,
     reads_alt: BTreeSet<u32>,
+    /// Targets whose mipmaps are made before it runs.
+    mipmapped: BTreeSet<u32>,
     scale: f32,
     /// Geometry programs: the flat draws' pipeline (where the renderer has
     /// them), and the targets written on their alternate side.
@@ -352,6 +509,9 @@ struct Common {
     /// The geometry's depth buffer, read into `depthtex0` and `depthtex1`.
     depth_layout: wgpu::BindGroupLayout,
     blit: wgpu::ShaderModule,
+    /// The downsampling that makes mipmaps.
+    mip_layout: wgpu::BindGroupLayout,
+    mip_module: wgpu::ShaderModule,
 }
 
 /// The textures of one folder at one size.
@@ -642,7 +802,9 @@ impl JavaStages {
             }
         }
         if let (Some(w), Some(atlas)) = (terrain, &mut self.atlas) {
+            let stamp = super::pass_times::stamp(encoder, "atlas update");
             atlas.update(device, encoder, w);
+            super::pass_times::stamp_end(encoder, stamp);
         }
         // The world after `prepare`, the terrain with it; translucent
         // terrain after `deferred`.
@@ -657,6 +819,13 @@ impl JavaStages {
         });
         let shadow = geometry
             .and_then(|((g, b), w)| Some((g.shadow.as_ref()?, bound.shadow.as_ref()?, b, w)));
+        // Targets whose mipmaps are out of date: all, then those written.
+        let mut dirty: BTreeSet<u32> = bound
+            .targets
+            .iter()
+            .filter(|(_, t)| t.mips.is_some())
+            .map(|(&i, _)| i)
+            .collect();
         for i in 0..=folder.passes.len() {
             if let Some((sh, b, g, w)) = shadow
                 && i == sh.at.min(folder.passes.len())
@@ -665,10 +834,12 @@ impl JavaStages {
             }
             if i == world_at {
                 world_in(encoder, bound);
+                dirty.insert(bound.world_target);
                 if let Some(((g, b), w)) = geometry {
                     g.terrain.draw_geometry(
                         queue, encoder, bound, &b.terrain, &b.test, &inputs, w, false,
                     );
+                    dirty.extend(g.terrain.draw_buffers.iter().copied());
                     depth_out(encoder, bound, true);
                 }
             }
@@ -677,14 +848,18 @@ impl JavaStages {
                 && let (Some(water), Some(group)) = (&g.water, &b.water)
             {
                 water.draw_geometry(queue, encoder, bound, group, &b.test, &inputs, w, true);
+                dirty.extend(water.draw_buffers.iter().copied());
                 depth_out(encoder, bound, false);
             }
             if let (Some(pass), Some(group)) = (folder.passes.get(i), bound.groups.get(i)) {
+                pass_mips(encoder, pass, &bound.targets, &mut dirty);
                 pass.draw(queue, encoder, bound, group, &self.common, &inputs);
+                dirty.extend(pass.draw_buffers.iter().copied());
             }
         }
         if let (Some(pass), Some(view)) = (&folder.final_pass, &bound.final_target) {
             let group = bound.groups.last().expect("final's group");
+            pass_mips(encoder, pass, &bound.targets, &mut dirty);
             pass.draw_to(
                 queue,
                 encoder,
@@ -700,6 +875,7 @@ impl JavaStages {
             let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Java shader pack picture"),
                 color_attachments: &attachments,
+                timestamp_writes: super::pass_times::writes("present"),
                 ..Default::default()
             });
             render.set_pipeline(&bound.present.0);
@@ -709,11 +885,18 @@ impl JavaStages {
         // The next frame starts unflipped: the last writes go back to main.
         for index in &folder.flipped_at_end {
             if let Some(t) = bound.targets.get(index) {
+                // A target that is cleared at the start of the next frame
+                // (both sides) has nothing to carry over.
+                if t.clear.is_some() {
+                    continue;
+                }
+                let stamp = super::pass_times::stamp(encoder, "flip copy");
                 encoder.copy_texture_to_texture(
                     t.alt.as_image_copy(),
                     t.main.as_image_copy(),
                     t.main.size(),
                 );
+                super::pass_times::stamp_end(encoder, stamp);
             }
         }
         &bound.output
@@ -913,6 +1096,11 @@ impl JavaStages {
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST;
+        let mip_wanted: BTreeSet<u32> = all
+            .clone()
+            .flat_map(|p| p.mipmapped.iter().copied())
+            .collect();
+        let mut mip_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline> = HashMap::new();
         let targets: BTreeMap<u32, Target> = used
             .iter()
             .filter_map(|&i| {
@@ -928,8 +1116,48 @@ impl JavaStages {
                     }
                     _ => size,
                 };
-                let main = texture("Java shader pack target", format, target_usage, target_size);
-                let alt = texture("Java shader pack target", format, target_usage, target_size);
+                // Targets some pass reads with mipmaps have the whole chain
+                // (filterable formats: the downsampling samples them).
+                let levels = if mip_wanted.contains(&i)
+                    && matches!(
+                        sample_type(format),
+                        wgpu::TextureSampleType::Float { filterable: true }
+                    ) {
+                    mip_levels(target_size)
+                } else {
+                    1
+                };
+                let side = || {
+                    device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("Java shader pack target"),
+                        size: wgpu::Extent3d {
+                            width: target_size[0].max(1),
+                            height: target_size[1].max(1),
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: levels,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage: target_usage,
+                        view_formats: &[],
+                    })
+                };
+                let (main, alt) = (side(), side());
+                let base = |t: &wgpu::Texture| {
+                    t.create_view(&wgpu::TextureViewDescriptor {
+                        mip_level_count: Some(1),
+                        ..Default::default()
+                    })
+                };
+                let mips = (levels > 1).then(|| MipChains {
+                    pipeline: mip_pipelines
+                        .entry(format)
+                        .or_insert_with(|| mip_pipeline(device, &self.common, format))
+                        .clone(),
+                    main: mip_steps(device, &self.common, &main, levels),
+                    alt: mip_steps(device, &self.common, &alt, levels),
+                });
                 // Iris: colortex0 to the fog colour, colortex1 to white.
                 let clear = settings.clear.then(|| {
                     let [r, g, b, a] = settings.clear_color.unwrap_or(match i {
@@ -947,8 +1175,11 @@ impl JavaStages {
                     i,
                     Target {
                         format,
-                        main_view: main.create_view(&Default::default()),
-                        alt_view: alt.create_view(&Default::default()),
+                        main_view: base(&main),
+                        alt_view: base(&alt),
+                        main_sample: main.create_view(&Default::default()),
+                        alt_sample: alt.create_view(&Default::default()),
+                        mips,
                         main,
                         alt,
                         clear,
@@ -1319,6 +1550,7 @@ fn draw_shadow(
                 }),
                 stencil_ops: None,
             }),
+            timestamp_writes: super::pass_times::writes(&format!("{} shadow", pass.program)),
             ..Default::default()
         });
         (world.draw)(
@@ -1407,6 +1639,7 @@ fn world_in(encoder: &mut wgpu::CommandEncoder, bound: &Bound) {
     ];
     let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Java shader pack world"),
+        timestamp_writes: super::pass_times::writes("world_in"),
         color_attachments: &attachments,
         depth_stencil_attachment: bound.geometry.as_ref().map(|g| {
             wgpu::RenderPassDepthStencilAttachment {
@@ -1441,6 +1674,7 @@ fn depth_out(encoder: &mut wgpu::CommandEncoder, bound: &Bound, solid: bool) {
     let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Java shader pack geometry depth"),
         color_attachments: &attachments,
+        timestamp_writes: super::pass_times::writes("depth_out"),
         ..Default::default()
     });
     render.set_pipeline(if solid { &g.out_both } else { &g.out });
@@ -1468,6 +1702,7 @@ fn clear_view(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, colo
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Java shader pack clear"),
         color_attachments: &attachments,
+        timestamp_writes: super::pass_times::writes("clear"),
         ..Default::default()
     });
 }
@@ -1529,6 +1764,10 @@ impl Common {
                 address_mode_w: address,
                 mag_filter: filter,
                 min_filter: filter,
+                mipmap_filter: match filter {
+                    wgpu::FilterMode::Linear => wgpu::MipmapFilterMode::Linear,
+                    wgpu::FilterMode::Nearest => wgpu::MipmapFilterMode::Nearest,
+                },
                 compare,
                 ..Default::default()
             })
@@ -1612,6 +1851,22 @@ impl Common {
                 label: Some("Java shader pack blit"),
                 source: wgpu::ShaderSource::Wgsl(BLIT.into()),
             }),
+            mip_layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Java shader pack mipmaps"),
+                entries: &[
+                    texture_entry(0, wgpu::TextureSampleType::Float { filterable: true }),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            }),
+            mip_module: device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Java shader pack mipmaps"),
+                source: wgpu::ShaderSource::Wgsl(MIP_SHADER.into()),
+            }),
         }
     }
 }
@@ -1657,6 +1912,13 @@ impl PassGpu {
             Output::Geometry(setup) => (None, Some(setup)),
         };
         let name = program.pass.program.clone();
+        if let Some(dir) = std::env::var_os("HORIZON_DUMP_WGSL") {
+            // For reading what a pack's programs became.
+            let base = std::path::Path::new(&dir).join(name.replace('/', "_"));
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(base.with_extension("fsh.wgsl"), &program.fragment.wgsl);
+            let _ = std::fs::write(base.with_extension("vsh.wgsl"), &program.vertex.wgsl);
+        }
         let link = &program.link;
         let mut samplers = Vec::new();
         let mut seen = BTreeSet::new();
@@ -1923,6 +2185,7 @@ impl PassGpu {
                 program.draw_buffers.clone()
             },
             reads_alt: program.pass.reads_alt.clone(),
+            mipmapped: program.pass.mipmapped.clone(),
             scale: program.pass.scale.clamp(0.0, 1.0),
             flat_pipeline: None,
             geometry: None,
@@ -2067,6 +2330,7 @@ impl PassGpu {
             attributes: Vec::new(),
             draw_buffers: program.draw_buffers.clone(),
             reads_alt,
+            mipmapped: BTreeSet::new(),
             scale: 1.0,
             flat_pipeline,
             geometry: Some(flipped),
@@ -2124,8 +2388,8 @@ impl PassGpu {
                     }
                     (false, Source::Target(i)) if s.dimension == wgpu::TextureViewDimension::D2 => {
                         match targets.get(&i) {
-                            Some(t) if self.reads_alt.contains(&i) => t.alt_view.clone(),
-                            Some(t) => t.main_view.clone(),
+                            Some(t) if self.reads_alt.contains(&i) => t.alt_sample.clone(),
+                            Some(t) => t.main_sample.clone(),
                             None => blank_view(device, queue, blank, s, BlankKind::Color(false)),
                         }
                     }
@@ -2302,6 +2566,7 @@ impl PassGpu {
                     }),
                     stencil_ops: None,
                 }),
+                timestamp_writes: super::pass_times::writes(&format!("{} geometry", self.program)),
                 ..Default::default()
             });
             (world.draw)(&mut render, layer, &pipelines);
@@ -2372,6 +2637,7 @@ impl PassGpu {
         let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(&self.program),
             color_attachments: &attachments,
+            timestamp_writes: super::pass_times::writes(&self.program),
             ..Default::default()
         });
         render.set_pipeline(&self.pipeline);

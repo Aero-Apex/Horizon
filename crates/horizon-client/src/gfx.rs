@@ -72,6 +72,7 @@ mod lod;
 mod occlusion;
 mod pack_stages;
 mod page_runs;
+mod pass_times;
 pub mod panorama;
 mod resident;
 mod stars;
@@ -1066,6 +1067,7 @@ impl Renderer {
             startup_step(format_args!("creating the pipelines"));
         }
         let gpu_timer = timing::GpuTimer::new(&device, &queue);
+        pass_times::init(&device, &queue);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon terrain"),
             source: wgpu::ShaderSource::Wgsl(include_str!("terrain.wgsl").into()),
@@ -4154,6 +4156,7 @@ impl Renderer {
             let shadow_view = self.world_post.shadow_depth().clone();
             let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Horizon shadow"),
+                timestamp_writes: pass_times::writes("Horizon shadow"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &shadow_view,
@@ -4203,6 +4206,7 @@ impl Renderer {
             })];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Horizon world"),
+                timestamp_writes: pass_times::writes("Horizon world"),
                 color_attachments: &attachments,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: world_depth,
@@ -4418,6 +4422,7 @@ impl Renderer {
                 })];
                 pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Horizon world, translucent"),
+                    timestamp_writes: pass_times::writes("Horizon world, translucent"),
                     color_attachments: &attachments,
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: world_depth,
@@ -4594,6 +4599,7 @@ impl Renderer {
                 })];
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Block breaking over a Java pack"),
+                    timestamp_writes: pass_times::writes("Block breaking over a Java pack"),
                     color_attachments: &attachments,
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: depth,
@@ -4626,6 +4632,7 @@ impl Renderer {
             })];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("First-person hand"),
+                timestamp_writes: pass_times::writes("First-person hand"),
                 color_attachments: &attachments,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
@@ -4659,6 +4666,7 @@ impl Renderer {
             })];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Screen effects"),
+                timestamp_writes: pass_times::writes("Screen effects"),
                 color_attachments: &attachments,
                 ..Default::default()
             });
@@ -4688,6 +4696,7 @@ impl Renderer {
             })];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("3d crosshair"),
+                timestamp_writes: pass_times::writes("3d crosshair"),
                 color_attachments: &attachments,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
@@ -4768,6 +4777,7 @@ impl Renderer {
             self.section_copy_bytes = 0;
             self.section_uploads.finish(&encoder);
         }
+        pass_times::resolve(&mut encoder);
         let commands = crate::spans::time("encode", || encoder.finish());
         let first_frame = self.first_frame == FirstFrame::Submit;
         if first_frame {
@@ -4775,6 +4785,7 @@ impl Renderer {
             self.first_frame = FirstFrame::Drawn;
         }
         let submission = crate::spans::time("submit", || self.queue.submit([commands]));
+        pass_times::collect(&self.device);
         if let Some(cull) = &mut self.cull {
             cull.submitted();
         }
