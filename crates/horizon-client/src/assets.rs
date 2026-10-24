@@ -96,6 +96,8 @@ pub struct RenderAssets {
     pub translucent_layers: Vec<bool>,
     /// Each layer's `MipmapGenerator` settings.
     pub sprite_mips: Vec<crate::mipmap::Settings>,
+    /// The resource packs' connected texture rules (`crate::ctm`).
+    pub ctm: crate::ctm::Ctm,
 }
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -217,6 +219,7 @@ impl RenderAssets {
         for stage in 0..10 {
             sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
         }
+        let ctm = crate::ctm::Ctm::load(root, registry, &mut sprites, &models.catalog);
         sprites.finish();
         Ok(Self {
             sprite_size: sprites.size,
@@ -231,6 +234,7 @@ impl RenderAssets {
             sprite_layers: sprites.layers,
             translucent_layers: sprites.translucent,
             sprite_mips: sprites.mips,
+            ctm,
         })
     }
 }

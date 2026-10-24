@@ -203,10 +203,16 @@ item list beside the menu and a recipe window.
   same over any item (the list, the window, the menu's own slots); Backspace goes
   back; Escape leaves the search box, then closes the window; the wheel turns
   pages, or steps through recipes in the window.
-- The window shows crafting (shaped recipes keep their grid, shapeless ones fill
-  it in order), smelting, blasting, smoking, campfire cooking, stonecutting,
-  smithing and transmute recipes, with ingredient tags cycling through their
-  items each second. Items in the window can be clicked too.
+- The window looks like the mod's: category tabs above it (crafting, smelting,
+  blasting, smoking, campfire, stonecutting, smithing), a title row with arrows
+  to the next category, a page row, then as many recipes as fit, each in its
+  frame. Shaped recipes keep their grid, shapeless ones fill it in order,
+  ingredient tags cycle through their items each second, and items in the
+  window can be clicked too.
+- The `+` beside a recipe puts its ingredients in the inventory in creative
+  mode (survival says it needs creative).
+- The list has no slot boxes, a lit square under the pointer, page arrows, the
+  search box and a wrench that opens the extras settings.
 - Recipes come from the prepared data pack (`recipe_table.rs`, read once).
 - Logic and tests: `jei.rs`; the game side `game/jei.rs`.
 
@@ -214,6 +220,23 @@ item list beside the menu and a recipe window.
 A rewrite of the Java mod for the Key Binds page: the search also matches the
 key's name (`shift`, `R`) and the category, and a button next to the search box
 cycles Show: All, Conflicts, Unbound, Changed.
+
+### Connected textures (a resource pack feature, always on)
+Resource packs in the OptiFine `optifine/ctm` format (what Continuity reads)
+connect: glass that loses its border against more glass, bookshelves, sandstone
+walls... The methods `ctm`, `horizontal`, `vertical`, `horizontal+vertical`,
+`vertical+horizontal`, `top`, `random`, `repeat` and `fixed` work, with
+`matchBlocks` (block ids and property values) and `matchTiles` (sprites),
+`connect=block|tile|state`, `innerSeams`, `faces`, `heights`, `orient`,
+`symmetry`, `weights`, `linked` and `prioritize`. Not done: the overlay
+methods, `ctm_compact`, `biomes` and `name` filters (those rules are logged and
+skipped). The tiles are extra layers of the block sprite array, so a connected
+face costs nothing more to draw. Logic and tests: `ctm.rs`; the mesher asks it
+for each face's layer.
+
+`python tools/connected_glass.py` makes a pack of connected glass (plain and
+all stained colours) from the game's own textures into `resourcepacks/`; turn
+on "Horizon Connected Glass" in Resource Packs.
 
 ## Shared rules
 

@@ -803,6 +803,7 @@ impl Mesher<'_> {
                                 face,
                                 ao,
                                 state,
+                                (id, world),
                             );
                         }
                     }
@@ -842,8 +843,30 @@ impl Mesher<'_> {
         face: &BakedFace,
         ao: bool,
         state: &Info,
+        (id, world): (u32, BlockPos),
     ) {
         let q = &face.quad;
+        // Connected textures: the face may show another layer of the sprite
+        // array, picked by the blocks around it.
+        let layer = if self.render.ctm.is_empty() {
+            face.layer
+        } else {
+            let at = |o: [i32; 3]| {
+                let c = |v: i32| v.clamp(-B, 15 + B);
+                pad.blocks[pi(c(pos[0] + o[0]), c(pos[1] + o[1]), c(pos[2] + o[2]))]
+            };
+            self.render
+                .ctm
+                .resolve(&crate::ctm::Query {
+                    state: id,
+                    layer: face.layer,
+                    face: q.facing as usize,
+                    pos: [world.x, world.y, world.z],
+                    quad: q,
+                    block_at: &at,
+                })
+                .unwrap_or(face.layer)
+        };
         let shade_face = q.shade_direction_override.unwrap_or(q.facing);
         let directional = lighting::cardinal(self.nether_shading, shade_face);
         // Grey level per vertex before tinting, and vanilla light coords.
@@ -878,9 +901,9 @@ impl Mesher<'_> {
                 q.uv[i],
                 // Opaque leaves (forceOpaque) draw in the solid layer: no alpha cutout.
                 if !self.cutout_leaves && state.leaves {
-                    face.layer as u16 | OPAQUE_LAYER
+                    layer as u16 | OPAQUE_LAYER
                 } else {
-                    face.layer as u16
+                    layer as u16
                 },
                 pack_rgb(rgb),
                 pack_coords(lighting::with_emission(coords[i], q.light_emission)),

@@ -48,3 +48,14 @@ by The Pixelify Sans Project Authors, licensed under the SIL Open Font License 1
 `crates/horizon-theme/icons/pixel/*.svg` are icons from
 [Pixelarticons](https://github.com/halfmage/pixelarticons) by Gerrit Halfmann, under the MIT
 license (`crates/horizon-theme/icons/pixel/LICENSE-pixelarticons.txt`).
+
+## Continuity
+
+`crates/horizon-client/src/ctm.rs` is a Rust rewrite of the connected-texture logic of
+[Continuity](https://github.com/PepperCode1/Continuity) by PepperCode1 and its contributors,
+licensed under the GNU Lesser General Public License 3.0: the 47-tile index table, the direction
+maps, the `horizontal`, `vertical`, `horizontal+vertical`, `vertical+horizontal`, `top`, `random`,
+`repeat` and `fixed` methods, the random mixing and the `.properties` parsing follow its Java
+source (`processor/simple/*`, `processor/DirectionMaps`, `properties/*`, `util/QuadUtil`,
+`util/MathUtil`). This file is derived from that work and is offered under the same license;
+the LGPL-3.0 text is at <https://www.gnu.org/licenses/lgpl-3.0.html>.

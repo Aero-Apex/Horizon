@@ -8,15 +8,13 @@ use horizon_client::{
     hud::{HudBatch, rgba},
     hud_layout::{self, Blend, GuiDraw},
     items::ItemStack,
-    jei::{self as logic, Category, Panel, Query, RecipeView, SLOT},
+    jei::{self as logic, Panel, Query, RecipeView, SLOT, TAB_HEIGHT, TAB_STEP},
     recipe_table::RecipeTable,
     ui::EditBox,
 };
 use std::{borrow::Cow, sync::Arc, time::Instant};
 use winit::{event::KeyEvent, keyboard::KeyCode};
 
-/// Side of the recipe window's small buttons and the page arrows.
-const BUTTON: f32 = 12.0;
 /// How many views Backspace can go back through.
 const HISTORY: usize = 32;
 
@@ -34,11 +32,18 @@ pub(super) struct JeiUi {
     hits: Vec<(f32, f32, String)>,
     /// The item under the pointer in the last frame.
     hover: Option<String>,
-    /// The recipe window's box and its previous and next buttons.
+    /// The recipe window's box, the arrows through its pages and through its
+    /// categories, its category tabs and the buttons that add a recipe's items.
     window: Option<[f32; 4]>,
     step: [[f32; 4]; 2],
-    /// The page arrows of the list.
+    cats: [[f32; 4]; 2],
+    tabs: Vec<[f32; 4]>,
+    plus: Vec<([f32; 4], Vec<(String, u32)>)>,
+    /// How many recipes the window's page holds.
+    per_page: usize,
+    /// The page arrows of the list and the wrench beside the search box.
     pages: [[f32; 4]; 2],
+    wrench: [f32; 4],
     /// Indices into the creative screen's items for `term`.
     results: Vec<usize>,
     term: Option<String>,
@@ -62,7 +67,12 @@ impl Default for JeiUi {
             hover: None,
             window: None,
             step: [[0.0; 4]; 2],
+            cats: [[0.0; 4]; 2],
+            tabs: Vec::new(),
+            plus: Vec::new(),
+            per_page: 1,
             pages: [[0.0; 4]; 2],
+            wrench: [0.0; 4],
             results: Vec::new(),
             term: None,
             table: None,
@@ -86,7 +96,24 @@ fn slot_box(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, x: f32,
     batch.fill(atlas, x + SLOT - 1.0, y + 1.0, 1.0, SLOT - 1.0, rgba(255, 255, 255, 255));
 }
 
-/// A small square button with a symbol in it.
+/// A button as the game's own: black rim, light edge top left, dark bottom
+/// right, bluish when the pointer is on it.
+fn button_box(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, r: [f32; 4], hover: bool) {
+    let fill = if hover {
+        rgba(125, 134, 188, 255)
+    } else {
+        rgba(111, 111, 111, 255)
+    };
+    batch.fill(atlas, r[0], r[1], r[2], r[3], rgba(0, 0, 0, 255));
+    batch.fill(atlas, r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0, fill);
+    batch.fill(atlas, r[0] + 1.0, r[1] + 1.0, r[2] - 3.0, 1.0, rgba(190, 190, 200, 255));
+    batch.fill(atlas, r[0] + 1.0, r[1] + 1.0, 1.0, r[3] - 3.0, rgba(190, 190, 200, 255));
+    batch.fill(atlas, r[0] + 2.0, r[1] + r[3] - 2.0, r[2] - 3.0, 1.0, rgba(60, 60, 66, 255));
+    batch.fill(atlas, r[0] + r[2] - 2.0, r[1] + 2.0, 1.0, r[3] - 3.0, rgba(60, 60, 66, 255));
+}
+
+/// A small square button with a symbol in it. `<` and `>` are drawn as
+/// triangles.
 fn button(
     batch: &mut HudBatch,
     atlas: &horizon_client::hud::HudAtlas,
@@ -94,13 +121,17 @@ fn button(
     label: &str,
     hover: bool,
 ) {
-    let fill = if hover {
-        rgba(160, 160, 190, 255)
-    } else {
-        rgba(110, 110, 110, 255)
-    };
-    batch.fill(atlas, r[0], r[1], r[2], r[3], rgba(20, 20, 20, 255));
-    batch.fill(atlas, r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0, fill);
+    button_box(batch, atlas, r, hover);
+    let white = rgba(255, 255, 255, 255);
+    if label == "<" || label == ">" {
+        let (cx, cy) = (r[0] + (r[2] / 2.0).floor(), r[1] + (r[3] / 2.0).floor());
+        for j in 0..4 {
+            let tall = (1 + 2 * j) as f32;
+            let x = if label == "<" { cx - 2.0 + j as f32 } else { cx + 1.0 - j as f32 };
+            batch.fill(atlas, x, cy - (tall / 2.0).floor(), 1.0, tall, white);
+        }
+        return;
+    }
     let tw = HudBatch::text_width(atlas, label);
     batch.text(
         atlas,
@@ -110,6 +141,44 @@ fn button(
         u32::MAX,
         true,
     );
+}
+
+/// A wrench, 12 by 12, in a button.
+fn wrench(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, r: [f32; 4], hover: bool) {
+    button_box(batch, atlas, r, hover);
+    let (x, y) = (r[0] + ((r[2] - 12.0) / 2.0).floor(), r[1] + ((r[3] - 12.0) / 2.0).floor());
+    let light = rgba(220, 220, 225, 255);
+    let shade = rgba(60, 60, 66, 255);
+    for i in 0..7 {
+        batch.fill(atlas, x + 1.0 + i as f32 + 1.0, y + 10.0 - i as f32 + 1.0, 2.0, 2.0, shade);
+        batch.fill(atlas, x + 1.0 + i as f32, y + 10.0 - i as f32, 2.0, 2.0, light);
+    }
+    batch.fill(atlas, x + 7.0, y + 1.0, 5.0, 5.0, light);
+    batch.fill(atlas, x + 9.0, y + 1.0, 3.0, 3.0, rgba(111, 111, 111, 255));
+}
+
+/// A grey strip with a centred title, as the window's header rows.
+fn strip(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, r: [f32; 4], title: &str) {
+    batch.fill(atlas, r[0], r[1], r[2], r[3], rgba(55, 55, 55, 255));
+    batch.fill(atlas, r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0, rgba(139, 139, 139, 255));
+    let tw = HudBatch::text_width(atlas, title);
+    batch.text(
+        atlas,
+        title,
+        (r[0] + (r[2] - tw) / 2.0).round(),
+        (r[1] + (r[3] - 8.0) / 2.0).round() + 1.0,
+        u32::MAX,
+        true,
+    );
+}
+
+/// A rectangle in the window's grey: white top left, dark bottom right.
+fn raised(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, x: f32, y: f32, w: f32, h: f32) {
+    batch.fill(atlas, x, y, w, h, rgba(198, 198, 198, 255));
+    batch.fill(atlas, x, y, w - 1.0, 1.0, rgba(255, 255, 255, 255));
+    batch.fill(atlas, x, y, 1.0, h - 1.0, rgba(255, 255, 255, 255));
+    batch.fill(atlas, x + 1.0, y + h - 1.0, w - 1.0, 1.0, rgba(85, 85, 85, 255));
+    batch.fill(atlas, x + w - 1.0, y + 1.0, 1.0, h - 1.0, rgba(85, 85, 85, 255));
 }
 
 /// The arrow between a recipe's inputs and its output, 24 wide and 16 tall.
@@ -286,14 +355,21 @@ impl Game<'_> {
         // The recipe window takes every click while it is up.
         if let Some(window) = self.jei.window.filter(|_| self.jei.view.is_some()) {
             self.jei.swallow = true;
-            if inside(p, self.jei.step[0]) {
+            let per_page = self.jei.per_page;
+            if let Some(i) = (0..2).find(|&i| inside(p, self.jei.step[i])) {
                 if let Some(v) = self.jei.view.as_mut() {
-                    v.step(false);
+                    v.step(i == 1, per_page);
                 }
-            } else if inside(p, self.jei.step[1]) {
+            } else if let Some(i) = (0..2).find(|&i| inside(p, self.jei.cats[i])) {
                 if let Some(v) = self.jei.view.as_mut() {
-                    v.step(true);
+                    v.step_category(i == 1);
                 }
+            } else if let Some(i) = self.jei.tabs.iter().position(|t| inside(p, *t)) {
+                if let Some(v) = self.jei.view.as_mut() {
+                    v.select(i);
+                }
+            } else if let Some(i) = self.jei.plus.iter().position(|(r, _)| inside(p, *r)) {
+                self.jei_give(i);
             } else if let Some(item) = self.jei_hit_at(p) {
                 self.jei_open(if right {
                     Query::Uses(item)
@@ -321,6 +397,12 @@ impl Game<'_> {
             self.jei.search.focused = true;
             self.jei.search.click(&self.gui.atlas, p.0, shift, false);
             self.jei.swallow = true;
+            return true;
+        }
+        if inside(p, self.jei.wrench) {
+            self.jei.search.focused = false;
+            self.jei.swallow = true;
+            self.open_options_at(false, horizon_client::options_ui::Page::Extras);
             return true;
         }
         self.jei.search.focused = false;
@@ -360,8 +442,9 @@ impl Game<'_> {
         if !self.jei_on() || d == 0.0 {
             return false;
         }
+        let per_page = self.jei.per_page;
         if let Some(view) = self.jei.view.as_mut() {
-            view.step(d < 0.0);
+            view.step(d < 0.0, per_page);
             return true;
         }
         let Some(panel) = self.jei.panel else {
@@ -377,6 +460,21 @@ impl Game<'_> {
             (self.jei.page + pages - 1) % pages
         };
         true
+    }
+
+    /// The `+` of a recipe: in creative, puts its ingredients in the inventory.
+    fn jei_give(&mut self, index: usize) {
+        if !self.creative {
+            self.message = Some(("Adding ingredients needs creative mode".into(), Instant::now()));
+            return;
+        }
+        let Some((_, items)) = self.jei.plus.get(index).cloned() else {
+            return;
+        };
+        for (item, count) in items {
+            let _ = self.give(ItemStack::new(&item, count));
+        }
+        self.message = Some(("Added the recipe's items".into(), Instant::now()));
     }
 
     /// The item whose slot the point is on, in the last frame.
@@ -428,25 +526,30 @@ impl Game<'_> {
                 .filter_map(|&k| all.get(k).cloned())
                 .collect()
         };
-        {
-            let atlas = &self.gui.atlas;
-            for n in 0..stacks.len() {
-                let (x, y) = panel.slot_origin(n);
-                slot_box(batch, atlas, x, y);
-            }
-        }
+        // No boxes: the items float over the world, the one under the pointer
+        // lit (unless the recipe window covers the list).
         for (n, stack) in stacks.iter().enumerate() {
             let (x, y) = panel.slot_origin(n);
+            if self.jei.view.is_none() && inside(cursor, [x, y, SLOT, SLOT]) {
+                batch.fill(
+                    &self.gui.atlas,
+                    x + 1.0,
+                    y + 1.0,
+                    SLOT - 2.0,
+                    SLOT - 2.0,
+                    rgba(255, 255, 255, 110),
+                );
+            }
             self.draw_item(batch, stack, x + 1.0, y + 1.0);
             self.jei.hits.push((x + 1.0, y + 1.0, stack.item.to_string()));
         }
 
-        // The page row and the search box.
+        // The page row and the search box with its wrench.
         let atlas = &self.gui.atlas;
         let width = panel.width();
         let arrows = [
-            [panel.x, panel.page_y, BUTTON, BUTTON],
-            [panel.x + width - BUTTON, panel.page_y, BUTTON, BUTTON],
+            [panel.x, panel.page_y, 20.0, 14.0],
+            [panel.x + width - 20.0, panel.page_y, 20.0, 14.0],
         ];
         self.jei.pages = arrows;
         button(batch, atlas, arrows[0], "<", inside(cursor, arrows[0]));
@@ -457,14 +560,17 @@ impl Game<'_> {
             atlas,
             &label,
             (panel.x + (width - tw) / 2.0).round(),
-            panel.page_y + 2.0,
+            panel.page_y + 3.0,
             u32::MAX,
             true,
         );
+        let wrench_box = [panel.x + width - 16.0, panel.search_y, 16.0, 16.0];
+        self.jei.wrench = wrench_box;
+        wrench(batch, atlas, wrench_box, inside(cursor, wrench_box));
         let search = &mut self.jei.search;
         search.x = panel.x;
         search.y = panel.search_y;
-        search.width = width;
+        search.width = width - 19.0;
         search.draw(batch, atlas, None);
         if self.jei.search.value.is_empty() && !self.jei.search.focused {
             batch.text(
@@ -494,102 +600,167 @@ impl Game<'_> {
         self.draw_jei_tooltip(batch);
     }
 
-    /// The recipe window, centred.
+    /// The recipe window, centred: category tabs above it, a title row and a
+    /// page row, then a page of recipes each in its own frame.
     fn draw_jei_window(&mut self, batch: &mut HudBatch) {
         let Some(view) = self.jei.view.clone() else {
             return;
         };
-        let recipe = view.current();
-        let layout = logic::layout(recipe);
-        let category = Category::of(&recipe.kind);
-        let w = (layout.size.0 + 24.0).max(170.0);
-        // The content, a header above it, and two footer lines below.
-        let h = layout.size.1 + 28.0 + 44.0;
+        let category = view.category();
+        let plan = logic::window(batch.height, category, view.recipes().len());
+        self.jei.per_page = plan.per_page;
+        let (w, h) = (plan.w, plan.h);
         let x = ((batch.width - w) / 2.0).floor();
-        let y = ((batch.height - h) / 2.0).floor();
+        let y = (((batch.height - h - TAB_HEIGHT) / 2.0).floor() + TAB_HEIGHT).max(TAB_HEIGHT);
         self.jei.window = Some([x, y, w, h]);
         let cursor = self.cursor;
         let millis = self.jei.started.elapsed().as_millis();
-        let (ox, oy) = (
-            (x + (w - layout.size.0) / 2.0).floor(),
-            (y + 28.0).floor(),
-        );
+        let selected = view.category.min(view.groups.len() - 1);
+        self.jei.tabs.clear();
+        self.jei.plus.clear();
         {
             let atlas = &self.gui.atlas;
             // The panel: black rim, light grey, white top left, dark bottom right.
             batch.fill(atlas, x - 1.0, y - 1.0, w + 2.0, h + 2.0, rgba(0, 0, 0, 255));
-            batch.fill(atlas, x, y, w, h, rgba(198, 198, 198, 255));
-            batch.fill(atlas, x, y, w - 1.0, 1.0, rgba(255, 255, 255, 255));
-            batch.fill(atlas, x, y, 1.0, h - 1.0, rgba(255, 255, 255, 255));
-            batch.fill(atlas, x + 1.0, y + h - 1.0, w - 1.0, 1.0, rgba(85, 85, 85, 255));
-            batch.fill(atlas, x + w - 1.0, y + 1.0, 1.0, h - 1.0, rgba(85, 85, 85, 255));
-            let dark = rgba(64, 64, 64, 255);
-            batch.text(atlas, category.title(), x + 28.0, y + 10.0, dark, false);
-            for &(dx, dy, _) in &layout.inputs {
-                slot_box(batch, atlas, ox + dx, oy + dy);
+            raised(batch, atlas, x, y, w, h);
+            // Tabs: the chosen one is part of the window, the others sit lower.
+            for i in 0..view.groups.len() {
+                let tx = x + 4.0 + i as f32 * TAB_STEP;
+                self.jei.tabs.push([tx, y - TAB_HEIGHT, 22.0, TAB_HEIGHT]);
+                if i == selected {
+                    batch.fill(atlas, tx - 1.0, y - TAB_HEIGHT - 1.0, 24.0, TAB_HEIGHT + 1.0, rgba(0, 0, 0, 255));
+                    raised(batch, atlas, tx, y - TAB_HEIGHT, 22.0, TAB_HEIGHT + 1.0);
+                } else {
+                    let top = y - TAB_HEIGHT + 3.0;
+                    batch.fill(atlas, tx - 1.0, top - 1.0, 24.0, TAB_HEIGHT - 2.0, rgba(0, 0, 0, 255));
+                    batch.fill(atlas, tx, top, 22.0, TAB_HEIGHT - 3.0, rgba(139, 139, 139, 255));
+                    batch.fill(atlas, tx, top, 21.0, 1.0, rgba(200, 200, 200, 255));
+                    batch.fill(atlas, tx, top, 1.0, TAB_HEIGHT - 4.0, rgba(200, 200, 200, 255));
+                }
             }
-            slot_box(batch, atlas, ox + layout.output.0, oy + layout.output.1);
-            arrow(batch, atlas, ox + layout.arrow.0, oy + layout.arrow.1);
+            // The title row (previous and next category) and the page row.
+            let pages = view.pages(plan.per_page);
+            let page = view.page.min(pages - 1);
+            let rows = [
+                [x + 6.0, y + 5.0, w - 12.0, 14.0],
+                [x + 6.0, y + 24.0, w - 12.0, 14.0],
+            ];
+            strip(batch, atlas, rows[0], category.title());
+            strip(batch, atlas, rows[1], &format!("{}/{}", page + 1, pages));
+            for (row, arrows) in [(rows[0], 0), (rows[1], 1)] {
+                let pair = [
+                    [row[0], row[1], 14.0, 14.0],
+                    [row[0] + row[2] - 14.0, row[1], 14.0, 14.0],
+                ];
+                if arrows == 0 {
+                    self.jei.cats = pair;
+                } else {
+                    self.jei.step = pair;
+                }
+                button(batch, atlas, pair[0], "<", inside(cursor, pair[0]));
+                button(batch, atlas, pair[1], ">", inside(cursor, pair[1]));
+            }
         }
-        if let Some((fx, fy)) = layout.flame {
-            let draws = [sprite(
-                "container/furnace/lit_progress",
-                (ox + fx) as i32,
-                (oy + fy) as i32,
-                14,
-            )];
-            hud_layout::paint(batch, &self.gui.atlas, &draws);
+        // The tab icons.
+        for (i, (group, _)) in view.groups.iter().enumerate().map(|(i, g)| (i, g)) {
+            let tab = self.jei.tabs[i];
+            let icon = ItemStack::new(group.station(), 1);
+            let lift = if i == selected { 5.0 } else { 7.0 };
+            self.draw_item(batch, &icon, tab[0] + 3.0, tab[1] + lift);
         }
-        // Items: the station, the inputs (cycling through a tag's items) and
-        // the result.
-        let station = ItemStack::new(&recipe.station, 1);
-        self.draw_item(batch, &station, x + 8.0, y + 6.0);
-        for &(dx, dy, index) in &layout.inputs {
-            if let Some(item) = recipe
-                .ingredients
-                .get(index)
-                .and_then(|alts| logic::alternative(alts, millis))
+        // The recipes of the page.
+        let recipes: Vec<_> = view.page_recipes(plan.per_page).to_vec();
+        for (n, recipe) in recipes.iter().enumerate() {
+            let layout = logic::layout(recipe);
+            let (fx, fy, fw, fh) = (x + 8.0, y + plan.frame_y(n), w - 16.0, plan.frame_h);
+            let ox = (fx + 4.0 + ((fw - 22.0 - layout.size.0) / 2.0).floor().max(0.0)).floor();
+            let oy = (fy + ((fh - layout.size.1) / 2.0).floor()).floor();
             {
-                let stack = ItemStack::new(item, 1);
-                let (ix, iy) = (ox + dx + 1.0, oy + dy + 1.0);
-                self.draw_item(batch, &stack, ix, iy);
-                self.jei.hits.push((ix, iy, item.to_owned()));
+                let atlas = &self.gui.atlas;
+                batch.fill(atlas, fx, fy, fw, fh, rgba(139, 139, 139, 255));
+                batch.fill(atlas, fx + 1.0, fy + 1.0, fw - 2.0, fh - 2.0, rgba(212, 212, 212, 255));
+                batch.fill(atlas, fx + 1.0, fy + fh - 2.0, fw - 2.0, 1.0, rgba(255, 255, 255, 255));
+                batch.fill(atlas, fx + fw - 2.0, fy + 1.0, 1.0, fh - 2.0, rgba(255, 255, 255, 255));
+                for &(dx, dy, _) in &layout.inputs {
+                    slot_box(batch, atlas, ox + dx, oy + dy);
+                }
+                slot_box(batch, atlas, ox + layout.output.0, oy + layout.output.1);
+                arrow(batch, atlas, ox + layout.arrow.0, oy + layout.arrow.1);
             }
+            if let Some((flx, fly)) = layout.flame {
+                let draws = [sprite(
+                    "container/furnace/lit_progress",
+                    (ox + flx) as i32,
+                    (oy + fly) as i32,
+                    14,
+                )];
+                hud_layout::paint(batch, &self.gui.atlas, &draws);
+            }
+            // Items: the inputs (cycling through a tag's items) and the result.
+            let mut needs: Vec<(String, u32)> = Vec::new();
+            for &(dx, dy, index) in &layout.inputs {
+                if let Some(item) = recipe
+                    .ingredients
+                    .get(index)
+                    .and_then(|alts| logic::alternative(alts, millis))
+                {
+                    let stack = ItemStack::new(item, 1);
+                    let (ix, iy) = (ox + dx + 1.0, oy + dy + 1.0);
+                    self.draw_item(batch, &stack, ix, iy);
+                    self.jei.hits.push((ix, iy, item.to_owned()));
+                }
+                if let Some(first) = recipe.ingredients.get(index).and_then(|alts| alts.first()) {
+                    match needs.iter_mut().find(|(item, _)| item == first) {
+                        Some(entry) => entry.1 += 1,
+                        None => needs.push((first.clone(), 1)),
+                    }
+                }
+            }
+            let result = ItemStack::new(&recipe.result, recipe.result_count);
+            let (rx, ry) = (ox + layout.output.0 + 1.0, oy + layout.output.1 + 1.0);
+            self.draw_item(batch, &result, rx, ry);
+            self.jei.hits.push((rx, ry, recipe.result.clone()));
+            // The plus: adds the recipe's items.
+            let plus = [fx + fw - 15.0, fy + fh - 15.0, 12.0, 12.0];
+            button(batch, &self.gui.atlas, plus, "+", inside(cursor, plus));
+            self.jei.plus.push((plus, needs));
         }
-        let result = ItemStack::new(&recipe.result, recipe.result_count);
-        let (rx, ry) = (ox + layout.output.0 + 1.0, oy + layout.output.1 + 1.0);
-        self.draw_item(batch, &result, rx, ry);
-        self.jei.hits.push((rx, ry, recipe.result.clone()));
-
-        // The footer: what is shown, and the buttons through the recipes.
-        let atlas = &self.gui.atlas;
-        let dark = rgba(64, 64, 64, 255);
-        let item_name = self.translate(
-            &format!("item.{}", view.query.item().replace(':', ".")),
-            &horizon_client::jade::title_case(view.query.item()),
-        );
-        let caption = match view.query {
-            Query::Output(_) => format!("Makes: {item_name}"),
-            Query::Uses(_) => format!("Uses: {item_name}"),
-        };
-        batch.text(atlas, &caption, x + 8.0, y + h - 36.0, dark, false);
-        let count = format!("{}/{}", view.index + 1, view.recipes.len());
-        let tw = HudBatch::text_width(atlas, &count);
-        let by = y + h - 20.0;
-        let prev = [x + w - 8.0 - BUTTON * 2.0 - tw - 8.0, by, BUTTON, BUTTON];
-        let next = [x + w - 8.0 - BUTTON, by, BUTTON, BUTTON];
-        self.jei.step = [prev, next];
-        button(batch, atlas, prev, "<", inside(cursor, prev));
-        button(batch, atlas, next, ">", inside(cursor, next));
-        batch.text(atlas, &count, prev[0] + BUTTON + 4.0, by + 2.0, dark, false);
         // The window's items may be hovered too.
         if let Some(item) = self.jei_hit_at(cursor) {
             self.jei.hover = Some(item);
         }
     }
 
+    /// The tip of the window's tab or plus button under the pointer.
+    fn jei_widget_tip(&self) -> Option<String> {
+        let p = self.cursor;
+        let view = self.jei.view.as_ref()?;
+        if let Some(i) = self.jei.tabs.iter().position(|t| inside(p, *t)) {
+            return view.groups.get(i).map(|g| g.0.title().to_owned());
+        }
+        if self.jei.plus.iter().any(|(r, _)| inside(p, *r)) {
+            return Some(
+                if self.creative {
+                    "Add the recipe's items"
+                } else {
+                    "Adding items needs creative mode"
+                }
+                .to_owned(),
+            );
+        }
+        if inside(p, self.jei.wrench) {
+            return Some("Horizon extras".to_owned());
+        }
+        None
+    }
+
     /// The tooltip of the item under the pointer in the list or window.
     fn draw_jei_tooltip(&mut self, batch: &mut HudBatch) {
+        if let Some(tip) = self.jei_widget_tip() {
+            let (cx, cy) = self.cursor;
+            self.draw_tooltip_lines(batch, &[(tip, u32::MAX)], cx, cy);
+            return;
+        }
         let Some(item) = self.jei_hit_at(self.cursor) else {
             return;
         };

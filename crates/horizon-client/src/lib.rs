@@ -7,6 +7,7 @@ pub mod jade;
 pub mod jei;
 pub mod animate_tick;
 pub mod appleskin;
+pub mod ctm;
 pub mod arrows;
 pub mod assets;
 pub mod atlas_sources;

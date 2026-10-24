@@ -11,7 +11,7 @@ pub const SLOT: f32 = 18.0;
 const EDGE: f32 = 6.0;
 const GAP: f32 = 12.0;
 /// Space the item list keeps above its grid (page row) and below (search box).
-const TOP: f32 = 16.0;
+const TOP: f32 = 20.0;
 const BOTTOM: f32 = 24.0;
 /// The narrowest list worth showing, in columns.
 const MIN_COLUMNS: usize = 3;
@@ -40,12 +40,14 @@ impl Query {
     }
 }
 
-/// The recipes of a query, one shown at a time.
+/// The recipes of a query, grouped by what makes them (crafting, smelting...),
+/// a page of one group shown at a time.
 #[derive(Clone, Debug)]
 pub struct RecipeView {
     pub query: Query,
-    pub recipes: Vec<RecipeInfo>,
-    pub index: usize,
+    pub groups: Vec<(Category, Vec<RecipeInfo>)>,
+    pub category: usize,
+    pub page: usize,
 }
 impl RecipeView {
     /// None when nothing makes (or uses) the item.
@@ -57,23 +59,59 @@ impl RecipeView {
         if found.is_empty() {
             return None;
         }
+        let mut groups: Vec<(Category, Vec<RecipeInfo>)> = Vec::new();
+        for recipe in found {
+            let category = Category::of(&recipe.kind).tab();
+            match groups.iter_mut().find(|g| g.0 == category) {
+                Some(group) => group.1.push(recipe.clone()),
+                None => groups.push((category, vec![recipe.clone()])),
+            }
+        }
+        groups.sort_by_key(|g| g.0);
         Some(Self {
-            recipes: found.into_iter().cloned().collect(),
             query,
-            index: 0,
+            groups,
+            category: 0,
+            page: 0,
         })
     }
-    pub fn current(&self) -> &RecipeInfo {
-        &self.recipes[self.index.min(self.recipes.len() - 1)]
+    fn group(&self) -> &(Category, Vec<RecipeInfo>) {
+        &self.groups[self.category.min(self.groups.len() - 1)]
     }
-    /// Steps through the recipes, wrapping round.
-    pub fn step(&mut self, forward: bool) {
-        let n = self.recipes.len();
-        self.index = if forward {
-            (self.index + 1) % n
-        } else {
-            (self.index + n - 1) % n
-        };
+    /// The category on show.
+    pub fn category(&self) -> Category {
+        self.group().0
+    }
+    /// Every recipe of the category on show.
+    pub fn recipes(&self) -> &[RecipeInfo] {
+        &self.group().1
+    }
+    /// How many pages the category takes at `per_page` recipes a page.
+    pub fn pages(&self, per_page: usize) -> usize {
+        self.recipes().len().div_ceil(per_page.max(1)).max(1)
+    }
+    /// The recipes of the page on show.
+    pub fn page_recipes(&self, per_page: usize) -> &[RecipeInfo] {
+        let per_page = per_page.max(1);
+        let all = self.recipes();
+        let start = (self.page.min(self.pages(per_page) - 1) * per_page).min(all.len());
+        &all[start..(start + per_page).min(all.len())]
+    }
+    /// Steps through the pages, wrapping round.
+    pub fn step(&mut self, forward: bool, per_page: usize) {
+        let n = self.pages(per_page);
+        let page = self.page.min(n - 1);
+        self.page = if forward { (page + 1) % n } else { (page + n - 1) % n };
+    }
+    /// Steps through the categories, wrapping round.
+    pub fn step_category(&mut self, forward: bool) {
+        let n = self.groups.len();
+        let now = self.category.min(n - 1);
+        self.select(if forward { (now + 1) % n } else { (now + n - 1) % n });
+    }
+    pub fn select(&mut self, category: usize) {
+        self.category = category.min(self.groups.len() - 1);
+        self.page = 0;
     }
 }
 
@@ -87,7 +125,7 @@ pub fn alternative(alternatives: &[String], millis: u128) -> Option<&str> {
     Some(&alternatives[i])
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Category {
     Crafting,
     Smelting,
@@ -121,6 +159,34 @@ impl Category {
             Category::Stonecutting => "Stonecutting",
             Category::Smithing => "Smithing",
             Category::Transmute => "Crafting",
+        }
+    }
+    /// The category whose tab holds this one (a transmute is crafting).
+    pub fn tab(self) -> Self {
+        match self {
+            Category::Transmute => Category::Crafting,
+            other => other,
+        }
+    }
+    /// The block whose icon marks the category's tab.
+    pub fn station(self) -> &'static str {
+        match self {
+            Category::Crafting | Category::Transmute => "minecraft:crafting_table",
+            Category::Smelting => "minecraft:furnace",
+            Category::Blasting => "minecraft:blast_furnace",
+            Category::Smoking => "minecraft:smoker",
+            Category::Campfire => "minecraft:campfire",
+            Category::Stonecutting => "minecraft:stonecutter",
+            Category::Smithing => "minecraft:smithing_table",
+        }
+    }
+    /// The height of a recipe's slots, as `layout` sizes them.
+    pub fn content_height(self) -> f32 {
+        match self {
+            Category::Crafting | Category::Transmute => 3.0 * SLOT,
+            Category::Smithing => SLOT,
+            Category::Stonecutting => 42.0,
+            _ => 40.0,
         }
     }
     /// Whether the window shows a flame under the input.
@@ -195,6 +261,51 @@ pub fn layout(r: &RecipeInfo) -> Layout {
             flame: Some((2.0, 22.0)),
             size: (80.0, 40.0),
         },
+    }
+}
+
+/// Width of the recipe window.
+pub const WINDOW_WIDTH: f32 = 176.0;
+/// Height of a category tab above the window and its width with the gap.
+pub const TAB_HEIGHT: f32 = 26.0;
+pub const TAB_STEP: f32 = 23.0;
+/// The window's rows above the first recipe: title and page rows.
+pub const HEADER: f32 = 46.0;
+const FOOTER: f32 = 6.0;
+const FRAME_GAP: f32 = 4.0;
+/// Most recipes on a page.
+const MAX_PER_PAGE: usize = 4;
+
+/// The recipe window's size for a category on a screen `screen_h` tall: how
+/// many recipes a page holds, and the framed height of one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Window {
+    pub w: f32,
+    pub h: f32,
+    pub per_page: usize,
+    pub frame_h: f32,
+}
+impl Window {
+    /// The top of recipe `n` of a page, relative to the window's top.
+    pub fn frame_y(&self, n: usize) -> f32 {
+        HEADER + n as f32 * (self.frame_h + FRAME_GAP)
+    }
+}
+
+/// `recipes` is how many recipes the category has: a window with few of them
+/// is not taller than they need.
+pub fn window(screen_h: f32, category: Category, recipes: usize) -> Window {
+    let frame_h = category.content_height() + 8.0;
+    // Room for the tabs above and a margin on both sides.
+    let room = (screen_h - TAB_HEIGHT - 24.0).min(230.0);
+    let fit = ((room - HEADER - FOOTER + FRAME_GAP) / (frame_h + FRAME_GAP)) as usize;
+    let per_page = fit.clamp(1, MAX_PER_PAGE);
+    let shown = per_page.min(recipes.max(1));
+    Window {
+        w: WINDOW_WIDTH,
+        h: HEADER + shown as f32 * (frame_h + FRAME_GAP) - FRAME_GAP + FOOTER,
+        per_page,
+        frame_h,
     }
 }
 
@@ -347,6 +458,52 @@ mod tests {
     }
 
     #[test]
+    fn recipes_group_by_category_in_tab_order() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("horizon-jei-groups-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let recipes = dir.join("data/minecraft/recipe");
+        std::fs::create_dir_all(&recipes).unwrap();
+        for (name, json) in [
+            ("a", r###"{"type":"minecraft:smelting","ingredient":"minecraft:cobblestone","result":{"id":"minecraft:stone"}}"###),
+            ("b", r###"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:cobblestone"],"result":{"id":"minecraft:stone_button"}}"###),
+            ("c", r###"{"type":"minecraft:stonecutting","ingredient":"minecraft:cobblestone","result":{"id":"minecraft:cobblestone_slab"}}"###),
+        ] {
+            std::fs::write(recipes.join(format!("{name}.json")), json).unwrap();
+        }
+        let table = RecipeTable::load(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut view = RecipeView::new(&table, Query::Uses("minecraft:cobblestone".into())).unwrap();
+        let order: Vec<Category> = view.groups.iter().map(|g| g.0).collect();
+        assert_eq!(
+            order,
+            vec![Category::Crafting, Category::Smelting, Category::Stonecutting]
+        );
+        view.step_category(false);
+        assert_eq!(view.category(), Category::Stonecutting);
+        view.select(1);
+        assert_eq!(view.category(), Category::Smelting);
+        assert_eq!(view.page, 0);
+        assert_eq!(Category::Transmute.tab(), Category::Crafting);
+    }
+
+    #[test]
+    fn the_window_fits_its_recipes() {
+        // A tall screen: a few crafting recipes on a page.
+        let w = window(300.0, Category::Crafting, 100);
+        assert!(w.per_page >= 2 && w.per_page <= 4);
+        assert_eq!(w.frame_h, 62.0);
+        assert_eq!(w.h, HEADER + w.per_page as f32 * 66.0 - 4.0 + 6.0);
+        // A short screen still shows one.
+        assert_eq!(window(100.0, Category::Crafting, 100).per_page, 1);
+        // Few recipes: no taller than they need.
+        let one = window(300.0, Category::Crafting, 1);
+        assert_eq!(one.per_page, w.per_page);
+        assert_eq!(one.h, HEADER + 62.0 + 6.0);
+        assert_eq!(one.frame_y(1), HEADER + 66.0);
+    }
+
+    #[test]
     fn ingredients_cycle_each_second() {
         let alts: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
         assert_eq!(alternative(&alts, 0), Some("a"));
@@ -400,14 +557,18 @@ mod tests {
         let table = RecipeTable::load(&table_dir);
         let _ = std::fs::remove_dir_all(&table_dir);
         let mut view = RecipeView::new(&table, Query::Output("minecraft:stick".into())).unwrap();
-        assert_eq!(view.recipes.len(), 2);
-        assert_eq!(view.index, 0);
-        view.step(true);
-        assert_eq!(view.index, 1);
-        view.step(true);
-        assert_eq!(view.index, 0);
-        view.step(false);
-        assert_eq!(view.index, 1);
+        assert_eq!(view.recipes().len(), 2);
+        // One recipe a page: two pages, stepping wraps round.
+        assert_eq!(view.pages(1), 2);
+        assert_eq!(view.pages(2), 1);
+        assert_eq!(view.page_recipes(1).len(), 1);
+        view.step(true, 1);
+        assert_eq!(view.page, 1);
+        view.step(true, 1);
+        assert_eq!(view.page, 0);
+        view.step(false, 1);
+        assert_eq!(view.page, 1);
+        assert_eq!(view.page_recipes(2).len(), 2);
         assert!(RecipeView::new(&table, Query::Uses("minecraft:diamond".into())).is_none());
         assert_eq!(
             Query::Output("x".into()).flipped(),
