@@ -243,6 +243,11 @@ under the crosshair.
   (`Items::correct_for_drops`).
 - Mobs also show breeding (`In Love`, or the cooldown after breeding) and their
   potion effects with the level and the time left (up to three).
+- The container lines (a furnace's items, brewing, a jukebox's record, a lectern's
+  book, a beehive's bees) read the client's copy of the block entity. In a test
+  a furnace filled through its own menu still showed no items in Jade, so they
+  do not follow live changes yet. The fix is to read the integrated server's
+  block entities, or to send their contents to the client.
 - Not done: a tamed mob's owner, a baby's time to grow up, villager and horse
   details, item frames, paintings, falling blocks, the trial spawner's cooldown,
   a hopper's lock, waxed signs, enchanting power, player heads, and the display
@@ -302,11 +307,19 @@ walls... The methods `ctm`, `horizontal`, `vertical`, `horizontal+vertical`,
 `vertical+horizontal`, `top`, `random`, `repeat` and `fixed` work, with
 `matchBlocks` (block ids and property values) and `matchTiles` (sprites),
 `connect=block|tile|state`, `innerSeams`, `faces`, `heights`, `orient`,
-`symmetry`, `weights`, `linked` and `prioritize`. Not done: the overlay family
-(Continuity's `overlay*` methods, which draw an extra layer over a face with a
-tint and a cutout or translucent layer; they need a second quad per face in the
-mesher and the edge and corner rule), `ctm_compact`, `biomes` and `name` filters
-(those rules are logged and skipped). The tiles are extra layers of the block sprite array, so a connected
+`symmetry`, `weights`, `linked` and `prioritize`.
+
+The overlay methods draw a second quad over a face, in the translucent or the
+solid pass, tinted by `tintIndex`: `overlay` (the 17 tiles on the sides and
+corners where a neighbour is not the block, `connectBlocks` and `connectTiles`
+narrow it), `overlay_fixed`, `overlay_random` and `overlay_repeat` (one tile on
+every face the rule matches, chosen as `fixed`, `random` or `repeat` chooses).
+Each quad is lifted 0.001 off the face so it wins the depth test. Logic and
+tests: `ctm.rs` (`overlays`, `standard_overlay`); the mesher draws them in
+`mesher.rs` `face`. The method names are the Java classes' (the registration
+file was not in the fetched source, so treat the names as inferred until a pack
+checks them). Not done: `overlay_ctm` (oriented), `tintBlock` (only `tintIndex`),
+`ctm_compact`, `biomes` and `name` filters (those rules are logged and skipped). The tiles are extra layers of the block sprite array, so a connected
 face costs nothing more to draw. Logic and tests: `ctm.rs`; the mesher asks it
 for each face's layer.
 

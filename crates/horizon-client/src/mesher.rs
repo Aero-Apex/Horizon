@@ -847,25 +847,23 @@ impl Mesher<'_> {
     ) {
         let q = &face.quad;
         // Connected textures: the face may show another layer of the sprite
-        // array, picked by the blocks around it.
+        // array, picked by the blocks around it, and overlays are drawn over it.
+        let at = |o: [i32; 3]| {
+            let c = |v: i32| v.clamp(-B, 15 + B);
+            pad.blocks[pi(c(pos[0] + o[0]), c(pos[1] + o[1]), c(pos[2] + o[2]))]
+        };
+        let ctm_query = crate::ctm::Query {
+            state: id,
+            layer: face.layer,
+            face: q.facing as usize,
+            pos: [world.x, world.y, world.z],
+            quad: q,
+            block_at: &at,
+        };
         let layer = if self.render.ctm.is_empty() {
             face.layer
         } else {
-            let at = |o: [i32; 3]| {
-                let c = |v: i32| v.clamp(-B, 15 + B);
-                pad.blocks[pi(c(pos[0] + o[0]), c(pos[1] + o[1]), c(pos[2] + o[2]))]
-            };
-            self.render
-                .ctm
-                .resolve(&crate::ctm::Query {
-                    state: id,
-                    layer: face.layer,
-                    face: q.facing as usize,
-                    pos: [world.x, world.y, world.z],
-                    quad: q,
-                    block_at: &at,
-                })
-                .unwrap_or(face.layer)
+            self.render.ctm.resolve(&ctm_query).unwrap_or(face.layer)
         };
         let shade_face = q.shade_direction_override.unwrap_or(q.facing);
         let directional = lighting::cardinal(self.nether_shading, shade_face);
@@ -908,6 +906,46 @@ impl Mesher<'_> {
                 pack_rgb(rgb),
                 pack_coords(lighting::with_emission(coords[i], q.light_emission)),
             ));
+        }
+        if !self.render.ctm.is_empty() {
+            let info = &self.tables.info;
+            let solid_full = |s: u32| {
+                info.get(s as usize)
+                    .map_or((false, false), |i| (i.solid, i.full))
+            };
+            let mut overlays = Vec::new();
+            self.render
+                .ctm
+                .overlays(&ctm_query, &solid_full, &mut overlays);
+            // Lifted off the face a little, so the overlay wins the depth test.
+            let lift = crate::ctm::NORMALS[q.facing as usize].map(|c| c as f32 * 0.001);
+            for overlay in overlays {
+                let target = if overlay.translucent {
+                    &mut out.translucent
+                } else {
+                    &mut out.solid
+                };
+                let tint = Self::tint(state, overlay.tint, tints, pos);
+                for i in 0..4 {
+                    let g = gray[i] as u32;
+                    let rgb = match tint {
+                        Some(t) => [16, 8, 0].map(|shift| g * (t >> shift & 255) / 255),
+                        None => [g; 3],
+                    };
+                    let p = q.positions[i];
+                    target.push(TerrainVertex::new(
+                        [
+                            p[0] + origin[0] + lift[0],
+                            p[1] + origin[1] + lift[1],
+                            p[2] + origin[2] + lift[2],
+                        ],
+                        q.uv[i],
+                        overlay.layer as u16,
+                        pack_rgb(rgb),
+                        pack_coords(lighting::with_emission(coords[i], q.light_emission)),
+                    ));
+                }
+            }
         }
     }
 }

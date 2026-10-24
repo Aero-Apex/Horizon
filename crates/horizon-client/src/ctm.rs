@@ -77,11 +77,8 @@ const V_THEN_H: [u8; 64] = [
 ];
 /// `OrientationMode.AXIS_ORIENTATIONS`: by the state's axis (x, y, z) and the
 /// face.
-const AXIS_ORIENTATIONS: [[u8; 6]; 3] = [
-    [3, 3, 1, 3, 0, 2],
-    [0, 0, 0, 0, 0, 0],
-    [2, 0, 2, 0, 1, 3],
-];
+const AXIS_ORIENTATIONS: [[u8; 6]; 3] =
+    [[3, 3, 1, 3, 0, 2], [0, 0, 0, 0, 0, 0], [2, 0, 2, 0, 1, 3]];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Method {
@@ -94,6 +91,14 @@ pub enum Method {
     Random,
     Repeat,
     Fixed,
+    /// `overlay`: the 17 tiles drawn over a face at the sides and corners
+    /// where a neighbour is not the same block (`StandardOverlayQuadProcessor`).
+    Overlay,
+    /// `overlay_fixed`, `overlay_random`, `overlay_repeat`: a tile over every
+    /// face the rule matches, chosen as `fixed`, `random` or `repeat` chooses.
+    OverlayFixed,
+    OverlayRandom,
+    OverlayRepeat,
 }
 impl Method {
     fn parse(name: &str) -> Option<Self> {
@@ -107,6 +112,10 @@ impl Method {
             "random" => Self::Random,
             "repeat" => Self::Repeat,
             "fixed" | "static" => Self::Fixed,
+            "overlay" => Self::Overlay,
+            "overlay_fixed" => Self::OverlayFixed,
+            "overlay_random" => Self::OverlayRandom,
+            "overlay_repeat" => Self::OverlayRepeat,
             _ => return None,
         })
     }
@@ -119,16 +128,35 @@ impl Method {
                 | Self::HorizontalVertical
                 | Self::VerticalHorizontal
                 | Self::Top
+                | Self::Overlay
+        )
+    }
+    /// The method whose tile choice this one uses (the overlay variants choose
+    /// their tile as the plain method does).
+    fn base(self) -> Self {
+        match self {
+            Self::OverlayFixed => Self::Fixed,
+            Self::OverlayRandom => Self::Random,
+            Self::OverlayRepeat => Self::Repeat,
+            other => other,
+        }
+    }
+    fn is_overlay(self) -> bool {
+        matches!(
+            self,
+            Self::Overlay | Self::OverlayFixed | Self::OverlayRandom | Self::OverlayRepeat
         )
     }
     /// How many tiles the method needs at least.
     fn tiles(self, rule: &Rule) -> usize {
-        match self {
+        match self.base() {
             Self::Ctm => 47,
             Self::Horizontal | Self::Vertical => 4,
             Self::HorizontalVertical | Self::VerticalHorizontal => 7,
             Self::Top | Self::Fixed | Self::Random => 1,
             Self::Repeat => rule.width * rule.height,
+            Self::Overlay => 17,
+            Self::OverlayFixed | Self::OverlayRandom | Self::OverlayRepeat => unreachable!(),
         }
     }
 }
@@ -173,9 +201,36 @@ enum Tile {
     /// A texture that is not there.
     Missing,
 }
+/// An overlay rule's `layer` and `tintIndex` (`OverlayPropertiesSection`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OverlaySpec {
+    translucent: bool,
+    /// The model tint index the overlay takes, -1 for none.
+    tint: i32,
+}
+
+/// One overlay quad the mesher draws over a face: a sprite layer, in the
+/// translucent pass or the solid one, tinted by the model's tint index (-1 for
+/// none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OverlayQuad {
+    pub layer: u32,
+    pub translucent: bool,
+    pub tint: i32,
+}
+
 #[derive(Clone, Debug)]
 struct Rule {
     method: Method,
+    /// Set for the overlay methods; their tiles are drawn over the face, not
+    /// instead of it.
+    overlay: Option<OverlaySpec>,
+    /// `matchBlocks` or the block name: the rule has block matches.
+    blocks: bool,
+    /// `connectBlocks`: a neighbour must be one of these to connect (overlays).
+    connect_blocks: bool,
+    /// `connectTiles`, as sprite layers (overlays).
+    connect_layers: Option<Vec<u32>>,
     connect: Connect,
     inner_seams: bool,
     orient: Orient,
@@ -225,6 +280,8 @@ pub struct Ctm {
     axis: Vec<u8>,
     /// For `connect=tile`: the layers a state shows on a face.
     tile_layers: HashMap<(u32, u8), Box<[u32]>>,
+    /// The overlay rules whose `connectBlocks` a state matches.
+    connect_by_state: Vec<Vec<u16>>,
 }
 
 /// One `.properties` file under `optifine/ctm`.
@@ -407,7 +464,10 @@ fn parse_match_tiles(source: &Source, text: &str) -> Vec<String> {
         } else if !path.contains('/') {
             path = format!("block/{path}");
         }
-        out.push(format!("{}:{path}", namespace.as_deref().unwrap_or("minecraft")));
+        out.push(format!(
+            "{}:{path}",
+            namespace.as_deref().unwrap_or("minecraft")
+        ));
     }
     out
 }
@@ -471,15 +531,27 @@ fn parse_heights(props: &HashMap<String, String>) -> Vec<(i32, i32)> {
     if let Some(text) = props.get("heights") {
         for token in text.split([' ', ',']).filter(|t| !t.is_empty()) {
             if let Some((a, b)) = token.split_once("..") {
-                let min = if a.is_empty() { Some(i32::MIN) } else { a.parse().ok() };
-                let max = if b.is_empty() { Some(i32::MAX) } else { b.parse().ok() };
+                let min = if a.is_empty() {
+                    Some(i32::MIN)
+                } else {
+                    a.parse().ok()
+                };
+                let max = if b.is_empty() {
+                    Some(i32::MAX)
+                } else {
+                    b.parse().ok()
+                };
                 if let (Some(min), Some(max)) = (min, max) {
                     out.push((min.min(max), min.max(max)));
                 }
                 continue;
             }
             let t: String = token.chars().filter(|c| !"()".contains(*c)).collect();
-            let split = t.char_indices().skip(1).find(|&(_, c)| c == '-').map(|(i, _)| i);
+            let split = t
+                .char_indices()
+                .skip(1)
+                .find(|&(_, c)| c == '-')
+                .map(|(i, _)| i);
             match split {
                 None => {
                     if let Ok(y) = t.parse::<i32>() {
@@ -494,8 +566,12 @@ fn parse_heights(props: &HashMap<String, String>) -> Vec<(i32, i32)> {
             }
         }
     } else {
-        let min = props.get("minHeight").and_then(|v| v.trim().parse::<i32>().ok());
-        let max = props.get("maxHeight").and_then(|v| v.trim().parse::<i32>().ok());
+        let min = props
+            .get("minHeight")
+            .and_then(|v| v.trim().parse::<i32>().ok());
+        let max = props
+            .get("maxHeight")
+            .and_then(|v| v.trim().parse::<i32>().ok());
         match (min, max) {
             (Some(a), Some(b)) => out.push((a.min(b), a.max(b))),
             (Some(a), None) => out.push((a, i32::MAX)),
@@ -635,8 +711,13 @@ fn mix32(mut z: u64) -> i32 {
 }
 /// `Mth.getSeed`'s hash of a position.
 fn hash_code(x: i32, y: i32, z: i32) -> i64 {
-    let mut l = i64::from(x.wrapping_mul(3_129_871)) ^ i64::from(z).wrapping_mul(116_129_781) ^ i64::from(y);
-    l = l.wrapping_mul(l).wrapping_mul(42_317_861).wrapping_add(l.wrapping_mul(11));
+    let mut l = i64::from(x.wrapping_mul(3_129_871))
+        ^ i64::from(z).wrapping_mul(116_129_781)
+        ^ i64::from(y);
+    l = l
+        .wrapping_mul(l)
+        .wrapping_mul(42_317_861)
+        .wrapping_add(l.wrapping_mul(11));
     l >> 16
 }
 fn mix(x: i32, y: i32, z: i32, face: usize, loops: i32) -> i32 {
@@ -674,6 +755,7 @@ impl Ctm {
         struct Def {
             rule: Rule,
             blocks: Option<Vec<BlockMatch>>,
+            connect_blocks: Option<Vec<BlockMatch>>,
             priority: bool,
             path: String,
         }
@@ -683,27 +765,36 @@ impl Ctm {
             let label = format!("{}:{}", source.namespace, source.path);
             let method_name = props.get("method").map_or("ctm", |m| m.trim());
             let Some(method) = Method::parse(method_name) else {
-                log::warn!("Horizon: connected textures: method '{method_name}' of {label} is not supported");
+                log::warn!(
+                    "Horizon: connected textures: method '{method_name}' of {label} is not supported"
+                );
                 continue;
             };
             if props.contains_key("biomes") || props.contains_key("name") {
-                log::warn!("Horizon: connected textures: {label} filters by biome or name, which is not supported");
+                log::warn!(
+                    "Horizon: connected textures: {label} filters by biome or name, which is not supported"
+                );
                 continue;
             }
-            let tiles: Vec<Tile> = parse_tiles(source, props.get("tiles").map_or("", String::as_str))
-                .into_iter()
-                .map(|t| match t {
-                    TileRef::Special => Tile::Skip,
-                    TileRef::Texture { sprite, file } => {
-                        if root.join(&file).is_file() {
-                            sprites.insert(root, &sprite).map_or(Tile::Missing, Tile::Layer)
-                        } else {
-                            Tile::Missing
+            let tiles: Vec<Tile> =
+                parse_tiles(source, props.get("tiles").map_or("", String::as_str))
+                    .into_iter()
+                    .map(|t| match t {
+                        TileRef::Special => Tile::Skip,
+                        TileRef::Texture { sprite, file } => {
+                            if root.join(&file).is_file() {
+                                sprites
+                                    .insert(root, &sprite)
+                                    .map_or(Tile::Missing, Tile::Layer)
+                            } else {
+                                Tile::Missing
+                            }
                         }
-                    }
-                })
-                .collect();
-            let match_tiles = props.get("matchTiles").map(|t| parse_match_tiles(source, t));
+                    })
+                    .collect();
+            let match_tiles = props
+                .get("matchTiles")
+                .map(|t| parse_match_tiles(source, t));
             let mut blocks = props.get("matchBlocks").map(|t| parse_match_blocks(t));
             if blocks.is_none()
                 && let Some(name) = Path::new(&source.path)
@@ -741,7 +832,7 @@ impl Ctm {
                 Some(c) if c == "none" => Orient::None,
                 Some(c) if c == "state_axis" => Orient::StateAxis,
                 Some(c) if c == "texture" => Orient::Texture,
-                _ if method == Method::Repeat => Orient::None,
+                _ if method.base() == Method::Repeat => Orient::None,
                 _ => Orient::Texture,
             };
             let symmetry = match props.get("symmetry").map(|c| c.trim().to_ascii_lowercase()) {
@@ -757,8 +848,36 @@ impl Ctm {
                 },
                 None => None,
             };
+            let overlay = method.is_overlay().then(|| {
+                if props.contains_key("tintBlock") {
+                    log::warn!("Horizon: connected textures: {label} has a tintBlock, which is not supported; only tintIndex is used");
+                }
+                OverlaySpec {
+                    translucent: props
+                        .get("layer")
+                        .is_some_and(|v| v.trim().eq_ignore_ascii_case("translucent")),
+                    tint: props
+                        .get("tintIndex")
+                        .and_then(|v| v.trim().parse::<i32>().ok())
+                        .filter(|v| *v >= 0)
+                        .unwrap_or(-1),
+                }
+            });
+            let connect_layers = props.get("connectTiles").map(|text| {
+                parse_match_tiles(source, text)
+                    .iter()
+                    .filter_map(|name| sprites.layers.get(name).copied())
+                    .collect::<Vec<u32>>()
+            });
+            let has_blocks = blocks.is_some();
+            let has_connect_blocks = props.contains_key("connectBlocks");
+            let connect_blocks = props.get("connectBlocks").map(|t| parse_match_blocks(t));
             let rule = Rule {
                 method,
+                overlay,
+                blocks: has_blocks,
+                connect_blocks: has_connect_blocks,
+                connect_layers,
                 connect,
                 inner_seams: parse_bool(props, "innerSeams"),
                 orient,
@@ -766,7 +885,10 @@ impl Ctm {
                 faces,
                 heights: parse_heights(props),
                 layers,
-                weights: props.get("weights").map(|w| parse_weights(w)).unwrap_or_default(),
+                weights: props
+                    .get("weights")
+                    .map(|w| parse_weights(w))
+                    .unwrap_or_default(),
                 loops: props
                     .get("randomLoops")
                     .and_then(|v| v.trim().parse::<i32>().ok())
@@ -777,7 +899,7 @@ impl Ctm {
                 width: number("width").unwrap_or(0),
                 height: number("height").unwrap_or(0),
             };
-            if method == Method::Repeat && (rule.width == 0 || rule.height == 0) {
+            if method.base() == Method::Repeat && (rule.width == 0 || rule.height == 0) {
                 log::warn!("Horizon: connected textures: {label} needs a width and a height");
                 continue;
             }
@@ -789,18 +911,23 @@ impl Ctm {
                 );
                 continue;
             }
-            let priority = props
-                .get("prioritize")
-                .map_or(rule.layers.is_some(), |v| v.trim().eq_ignore_ascii_case("true"));
+            let priority = props.get("prioritize").map_or(rule.layers.is_some(), |v| {
+                v.trim().eq_ignore_ascii_case("true")
+            });
             defs.push(Def {
                 rule,
                 blocks,
+                connect_blocks,
                 priority,
                 path: label,
             });
         }
         // Prioritised rules first, then by name.
-        defs.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.path.cmp(&b.path)));
+        defs.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.path.cmp(&b.path))
+        });
 
         let states = registry.len();
         let mut names: HashMap<&str, u32> = HashMap::new();
@@ -813,6 +940,16 @@ impl Ctm {
             }
         }
         let mut by_state: Vec<Vec<u16>> = vec![Vec::new(); states];
+        let mut connect_by_state: Vec<Vec<u16>> = vec![Vec::new(); states];
+        let mut wanted_connect: HashMap<&str, Vec<(usize, &BlockMatch)>> = HashMap::new();
+        for (i, def) in defs.iter().enumerate() {
+            for m in def.connect_blocks.iter().flatten() {
+                wanted_connect
+                    .entry(m.name.as_str())
+                    .or_default()
+                    .push((i, m));
+            }
+        }
         for id in 0..states {
             let Some(state) = registry.state(BlockStateId(id as u32)) else {
                 block_of.push(u32::MAX);
@@ -840,6 +977,19 @@ impl Ctm {
                     }
                 }
             }
+            if let Some(list) = wanted_connect.get(state.name.as_str()) {
+                for &(i, m) in list {
+                    let ok = m.properties.iter().all(|(key, values)| {
+                        state
+                            .properties
+                            .get(key)
+                            .is_none_or(|have| values.iter().any(|v| v == have))
+                    });
+                    if ok {
+                        connect_by_state[id].push(i as u16);
+                    }
+                }
+            }
         }
         let mut by_layer: HashMap<u32, Vec<u16>> = HashMap::new();
         for (i, def) in defs.iter().enumerate() {
@@ -849,9 +999,11 @@ impl Ctm {
                 }
             }
         }
-        let needs_tiles = defs
-            .iter()
-            .any(|d| d.rule.connect == Connect::Tile && d.rule.method.connects());
+        let needs_tiles = defs.iter().any(|d| {
+            (d.rule.connect == Connect::Tile && d.rule.method.connects())
+                || (d.rule.overlay.is_some()
+                    && (d.rule.layers.is_some() || d.rule.connect_layers.is_some()))
+        });
         let mut tile_layers = HashMap::new();
         if needs_tiles {
             let mut sets: BTreeMap<(u32, u8), Vec<u32>> = BTreeMap::new();
@@ -883,6 +1035,7 @@ impl Ctm {
             block_of,
             axis,
             tile_layers,
+            connect_by_state,
         };
         log::info!("Horizon: {} connected texture rules", ctm.rules.len());
         ctm
@@ -891,7 +1044,10 @@ impl Ctm {
     /// The layer to draw the face with instead of the model's, if a rule
     /// gives it one.
     pub fn resolve(&self, q: &Query) -> Option<u32> {
-        let by_state = self.by_state.get(q.state as usize).map_or(&[][..], Vec::as_slice);
+        let by_state = self
+            .by_state
+            .get(q.state as usize)
+            .map_or(&[][..], Vec::as_slice);
         let by_layer = self.by_layer.get(&q.layer).map_or(&[][..], Vec::as_slice);
         if by_state.is_empty() && by_layer.is_empty() {
             return None;
@@ -919,6 +1075,10 @@ impl Ctm {
                 (None, None) => return None,
             };
             let rule = &self.rules[next as usize];
+            // Overlays draw over the face (`overlays`), they do not replace its layer.
+            if rule.overlay.is_some() {
+                continue;
+            }
             if let Some(layers) = &rule.layers
                 && !layers.contains(&q.layer)
             {
@@ -936,18 +1096,27 @@ impl Ctm {
         self.axis.get(state as usize).copied().unwrap_or(0)
     }
 
-    fn apply(&self, rule: &Rule, q: &Query) -> Applied {
+    /// Whether the rule's `heights` and `faces` take this face.
+    fn face_matches(&self, rule: &Rule, q: &Query) -> bool {
         if !rule.heights.is_empty()
-            && !rule.heights.iter().any(|&(lo, hi)| (lo..=hi).contains(&q.pos[1]))
+            && !rule
+                .heights
+                .iter()
+                .any(|&(lo, hi)| (lo..=hi).contains(&q.pos[1]))
         {
+            return false;
+        }
+        match rule.faces {
+            Some(mask) => mask & (1 << effective_face(self.axis_of(q.state), q.face)) != 0,
+            None => true,
+        }
+    }
+
+    fn apply(&self, rule: &Rule, q: &Query) -> Applied {
+        if !self.face_matches(rule, q) {
             return Applied::Next;
         }
-        if let Some(mask) = rule.faces
-            && mask & (1 << effective_face(self.axis_of(q.state), q.face)) == 0
-        {
-            return Applied::Next;
-        }
-        let tile = match rule.method {
+        let tile = match rule.method.base() {
             Method::Ctm => {
                 let dirs = self.directions(rule, q);
                 let mut connections = 0usize;
@@ -958,7 +1127,8 @@ impl Ctm {
                 }
                 for i in 0..4 {
                     let (first, second) = (i, (i + 1) % 4);
-                    if connections >> (first * 2) & 1 == 1 && connections >> (second * 2) & 1 == 1
+                    if connections >> (first * 2) & 1 == 1
+                        && connections >> (second * 2) & 1 == 1
                         && self.connects(rule, q, add(dirs[first], dirs[second]))
                     {
                         connections |= 1 << (i * 2 + 1);
@@ -1020,7 +1190,11 @@ impl Ctm {
                         if self.connects(rule, q, direction) {
                             secondary |= 1 << (i * 3);
                             for j in 0..2 {
-                                if self.connects(rule, q, add(direction, dirs[((i + j) % 2) * 2 + 1])) {
+                                if self.connects(
+                                    rule,
+                                    q,
+                                    add(direction, dirs[((i + j) % 2) * 2 + 1]),
+                                ) {
                                     secondary |= 1 << ((i * 3 + j * 2 + 5) % 6);
                                 }
                             }
@@ -1053,6 +1227,13 @@ impl Ctm {
                 }
             }
             Method::Fixed => rule.tiles[0],
+            // Drawn by `overlays`, never as the face's own layer.
+            Method::Overlay
+            | Method::OverlayFixed
+            | Method::OverlayRandom
+            | Method::OverlayRepeat => {
+                return Applied::Next;
+            }
             Method::Random => {
                 let [x, mut y, z] = q.pos;
                 if rule.linked {
@@ -1106,8 +1287,199 @@ impl Ctm {
         }
     }
 
+    /// The overlays a face gets, in rule order, appended to `out`. `solid_full`
+    /// gives a state's (`isSolidRender`, `isCollisionShapeFullBlock`).
+    pub fn overlays(
+        &self,
+        q: &Query,
+        solid_full: &dyn Fn(u32) -> (bool, bool),
+        out: &mut Vec<OverlayQuad>,
+    ) {
+        let by_state = self
+            .by_state
+            .get(q.state as usize)
+            .map_or(&[][..], Vec::as_slice);
+        let by_layer = self.by_layer.get(&q.layer).map_or(&[][..], Vec::as_slice);
+        for &i in by_state.iter().chain(by_layer) {
+            let rule = &self.rules[i as usize];
+            let Some(spec) = rule.overlay else {
+                continue;
+            };
+            if let Some(layers) = &rule.layers
+                && !layers.contains(&q.layer)
+            {
+                continue;
+            }
+            let quad = |layer| OverlayQuad {
+                layer,
+                translucent: spec.translucent,
+                tint: spec.tint,
+            };
+            if rule.method == Method::Overlay {
+                if !self.face_matches(rule, q) {
+                    continue;
+                }
+                for tile in self.standard_overlay(usize::from(i), rule, q, solid_full) {
+                    if let Tile::Layer(layer) = rule.tiles[tile] {
+                        out.push(quad(layer));
+                    }
+                }
+            } else if let Applied::Layer(layer) = self.apply(rule, q) {
+                out.push(quad(layer));
+            }
+        }
+    }
+
+    /// `StandardOverlayQuadProcessor`: the tiles (indices into the rule's tiles)
+    /// an overlay draws on a face, from its four sides and their corners. The
+    /// sides are, in `directions` order, left, down, right and up.
+    fn standard_overlay(
+        &self,
+        index: usize,
+        rule: &Rule,
+        q: &Query,
+        solid_full: &dyn Fn(u32) -> (bool, bool),
+    ) -> Vec<usize> {
+        let light = NORMALS[q.face];
+        let dirs = self.directions(rule, q);
+        let solid = |offset: [i32; 3]| solid_full((q.block_at)(offset)).0;
+        // A side is looked at only when the block in front of it is not solid.
+        let mut sides: [Option<u32>; 4] = [None; 4];
+        let mut applied = 0usize;
+        for (i, &d) in dirs.iter().enumerate() {
+            if !solid(add(d, light)) {
+                sides[i] = Some((q.block_at)(d));
+                if self.overlay_applies(index, rule, q, d, solid_full) {
+                    applied |= 1 << i;
+                }
+            }
+        }
+        let same = |i: usize| self.overlay_same(index, rule, sides[i], q.face);
+        let corner = |a: usize, b: usize| {
+            let at = add(dirs[a], dirs[b]);
+            self.overlay_applies(index, rule, q, at, solid_full) && !solid(add(at, light))
+        };
+        // Two adjacent sides, with the corner between them.
+        let two = |a: usize, b: usize, side: usize, corner_tile: usize| {
+            let mut tiles = vec![side];
+            if (same(a) || same(b)) && corner(a, b) {
+                tiles.push(corner_tile);
+            }
+            tiles
+        };
+        // One side, with the corners at its two ends.
+        let one = |a: usize, b: usize, c: usize, side: usize, ab: usize, bc: usize| {
+            let (near_ab, near_bc) = if same(b) {
+                (true, true)
+            } else {
+                (same(a), same(c))
+            };
+            let mut tiles = vec![side];
+            if near_ab && corner(a, b) {
+                tiles.push(ab);
+            }
+            if near_bc && corner(b, c) {
+                tiles.push(bc);
+            }
+            tiles
+        };
+        match applied {
+            0b1111 => vec![8],
+            0b0111 => vec![5],
+            0b1011 => vec![6],
+            0b1101 => vec![13],
+            0b1110 => vec![12],
+            0b0101 => vec![9, 7],
+            0b1010 => vec![1, 15],
+            0b0011 => two(2, 3, 4, 14),
+            0b0110 => two(3, 0, 3, 16),
+            0b1100 => two(0, 1, 10, 2),
+            0b1001 => two(1, 2, 11, 0),
+            0b0001 => one(1, 2, 3, 9, 0, 14),
+            0b0010 => one(2, 3, 0, 1, 14, 16),
+            0b0100 => one(3, 0, 1, 7, 16, 2),
+            0b1000 => one(0, 1, 2, 15, 2, 0),
+            // No side: only the corners next to a side that has the overlay.
+            _ => {
+                let mut tiles = Vec::new();
+                if (same(0) || same(1)) && corner(0, 1) {
+                    tiles.push(2);
+                }
+                if (same(1) || same(2)) && corner(1, 2) {
+                    tiles.push(0);
+                }
+                if (same(2) || same(3)) && corner(2, 3) {
+                    tiles.push(14);
+                }
+                if (same(3) || same(0)) && corner(3, 0) {
+                    tiles.push(16);
+                }
+                tiles
+            }
+        }
+    }
+
+    /// `appliesOverlay` at `offset`: the block there is a full block, it matches
+    /// the rule's `connectBlocks` and `connectTiles`, and it does not connect.
+    fn overlay_applies(
+        &self,
+        index: usize,
+        rule: &Rule,
+        q: &Query,
+        offset: [i32; 3],
+        solid_full: &dyn Fn(u32) -> (bool, bool),
+    ) -> bool {
+        let other = (q.block_at)(offset);
+        if !solid_full(other).1 {
+            return false;
+        }
+        if rule.connect_blocks
+            && !self
+                .connect_by_state
+                .get(other as usize)
+                .is_some_and(|list| list.contains(&(index as u16)))
+        {
+            return false;
+        }
+        if let Some(layers) = &rule.connect_layers
+            && !self.shows_any(other, q.face, layers)
+        {
+            return false;
+        }
+        !self.same(rule, q, other)
+    }
+
+    /// `hasSameOverlay`: the neighbour is a block the rule matches, and shows
+    /// the rule's `matchTiles` on the face.
+    fn overlay_same(&self, index: usize, rule: &Rule, other: Option<u32>, face: usize) -> bool {
+        let Some(other) = other else {
+            return false;
+        };
+        if rule.blocks
+            && !self
+                .by_state
+                .get(other as usize)
+                .is_some_and(|list| list.contains(&(index as u16)))
+        {
+            return false;
+        }
+        rule.layers
+            .as_ref()
+            .is_none_or(|layers| self.shows_any(other, face, layers))
+    }
+
+    /// Whether a state shows any of `layers` on a face.
+    fn shows_any(&self, state: u32, face: usize, layers: &[u32]) -> bool {
+        self.tile_layers
+            .get(&(state, face as u8))
+            .is_some_and(|shown| layers.iter().any(|layer| shown.contains(layer)))
+    }
+
     fn block_of(&self, state: u32) -> u32 {
-        self.block_of.get(state as usize).copied().unwrap_or(u32::MAX)
+        self.block_of
+            .get(state as usize)
+            .copied()
+            .unwrap_or(u32::MAX)
     }
 
     fn orientation(&self, rule: &Rule, q: &Query) -> u8 {
@@ -1185,9 +1557,24 @@ mod tests {
     fn quad(face: usize) -> ModelQuad {
         // A unit face with the default texture orientation of a cube face.
         let positions = match face {
-            NORTH => [[1.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            SOUTH => [[0.0, 1.0, 1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0]],
-            UP => [[0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 0.0]],
+            NORTH => [
+                [1.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            SOUTH => [
+                [0.0, 1.0, 1.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            UP => [
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [1.0, 1.0, 0.0],
+            ],
             _ => [[0.0; 3]; 4],
         };
         let direction = match face {
@@ -1214,6 +1601,10 @@ mod tests {
     fn rule(method: Method, tiles: usize) -> Rule {
         Rule {
             method,
+            overlay: None,
+            blocks: true,
+            connect_blocks: false,
+            connect_layers: None,
             connect: Connect::State,
             inner_seams: false,
             orient: Orient::None,
@@ -1294,8 +1685,15 @@ mod tests {
             assert_eq!(file, "assets/minecraft/optifine/ctm/glass/0.png");
         }
         assert_eq!(
-            parse_match_tiles(&source, "glass minecraft:block/stone textures/block/dirt.png"),
-            vec!["minecraft:block/glass", "minecraft:block/stone", "minecraft:block/dirt"]
+            parse_match_tiles(
+                &source,
+                "glass minecraft:block/stone textures/block/dirt.png"
+            ),
+            vec![
+                "minecraft:block/glass",
+                "minecraft:block/stone",
+                "minecraft:block/dirt"
+            ]
         );
     }
 
@@ -1304,7 +1702,10 @@ mod tests {
         let m = parse_match_blocks("glass minecraft:oak_log:axis=y,z create:casing:kind=a");
         assert_eq!(m[0].name, "minecraft:glass");
         assert_eq!(m[1].name, "minecraft:oak_log");
-        assert_eq!(m[1].properties, vec![("axis".to_owned(), vec!["y".to_owned(), "z".to_owned()])]);
+        assert_eq!(
+            m[1].properties,
+            vec![("axis".to_owned(), vec!["y".to_owned(), "z".to_owned()])]
+        );
         assert_eq!(m[2].name, "create:casing");
     }
 
@@ -1325,7 +1726,10 @@ mod tests {
     fn directions_follow_the_face() {
         // The north face seen from outside: left is east, up is up.
         let d = directions(NORTH, 0);
-        assert_eq!(d, [NORMALS[EAST], NORMALS[DOWN], NORMALS[WEST], NORMALS[UP]]);
+        assert_eq!(
+            d,
+            [NORMALS[EAST], NORMALS[DOWN], NORMALS[WEST], NORMALS[UP]]
+        );
         // The south face: left is west.
         assert_eq!(directions(SOUTH, 0)[0], NORMALS[WEST]);
         // The top face has north as its up, and west on its left.
@@ -1341,16 +1745,31 @@ mod tests {
     #[test]
     fn a_row_of_blocks_connects_sideways() {
         // State 5 along x on the north face: the middle block has both sides.
-        let row = |p: [i32; 3]| if p[1] == 0 && p[2] == 0 && (-1..=1).contains(&p[0]) { 5 } else { 0 };
+        let row = |p: [i32; 3]| {
+            if p[1] == 0 && p[2] == 0 && (-1..=1).contains(&p[0]) {
+                5
+            } else {
+                0
+            }
+        };
         let at = |o: [i32; 3]| row(o);
         // Left and right connected: 1 + 16 = 17, tile 2.
-        assert_eq!(pick(rule(Method::Ctm, 47), NORTH, [0, 0, 0], &at), Some(102));
+        assert_eq!(
+            pick(rule(Method::Ctm, 47), NORTH, [0, 0, 0], &at),
+            Some(102)
+        );
         // Alone: tile 0.
         let alone = |o: [i32; 3]| if o == [0, 0, 0] { 5 } else { 0 };
-        assert_eq!(pick(rule(Method::Ctm, 47), NORTH, [0, 0, 0], &alone), Some(100));
+        assert_eq!(
+            pick(rule(Method::Ctm, 47), NORTH, [0, 0, 0], &alone),
+            Some(100)
+        );
         // Everything around: tile 26.
         let all = |_: [i32; 3]| 5;
-        assert_eq!(pick(rule(Method::Ctm, 47), NORTH, [0, 0, 0], &all), Some(126));
+        assert_eq!(
+            pick(rule(Method::Ctm, 47), NORTH, [0, 0, 0], &all),
+            Some(126)
+        );
     }
 
     #[test]
@@ -1381,9 +1800,15 @@ mod tests {
             [1, 0, 0] | [1, 0, -1] => 5,
             _ => 0,
         };
-        assert_eq!(pick(r.clone(), NORTH, [0, 0, 0], &blocked), Some(100 + u32::from(LINE_TILES[0])));
+        assert_eq!(
+            pick(r.clone(), NORTH, [0, 0, 0], &blocked),
+            Some(100 + u32::from(LINE_TILES[0]))
+        );
         let open = |o: [i32; 3]| if o == [1, 0, 0] { 5 } else { 0 };
-        assert_eq!(pick(r, NORTH, [0, 0, 0], &open), Some(100 + u32::from(LINE_TILES[1])));
+        assert_eq!(
+            pick(r, NORTH, [0, 0, 0], &open),
+            Some(100 + u32::from(LINE_TILES[1]))
+        );
     }
 
     #[test]
@@ -1440,7 +1865,14 @@ mod tests {
     fn horizontal_vertical_falls_back_to_the_ends() {
         // Only the block above connects: the vertical tiles of h+v are 3..=6.
         let above = |o: [i32; 3]| if o == [0, 1, 0] { 5 } else { 0 };
-        let tile = pick(rule(Method::HorizontalVertical, 7), NORTH, [0, 0, 0], &above).unwrap() - 100;
+        let tile = pick(
+            rule(Method::HorizontalVertical, 7),
+            NORTH,
+            [0, 0, 0],
+            &above,
+        )
+        .unwrap()
+            - 100;
         assert!((3..=6).contains(&tile), "{tile}");
         // Nothing around: the first tile of the secondary map.
         let none = |_: [i32; 3]| 0;
@@ -1453,10 +1885,106 @@ mod tests {
     #[test]
     fn the_top_method_joins_the_block_above() {
         let above = |o: [i32; 3]| if o == [0, 1, 0] { 5 } else { 0 };
-        assert_eq!(pick(rule(Method::Top, 1), NORTH, [0, 0, 0], &above), Some(100));
+        assert_eq!(
+            pick(rule(Method::Top, 1), NORTH, [0, 0, 0], &above),
+            Some(100)
+        );
         // Not on the top face itself, and not without the block above.
         assert_eq!(pick(rule(Method::Top, 1), UP, [0, 0, 0], &above), None);
         let none = |_: [i32; 3]| 0;
         assert_eq!(pick(rule(Method::Top, 1), NORTH, [0, 0, 0], &none), None);
+    }
+
+    /// A Ctm with one overlay rule for state 5 (the base block).
+    fn overlay_ctm(method: Method, tiles: usize) -> Ctm {
+        let mut overlay = rule(method, tiles);
+        overlay.overlay = Some(OverlaySpec {
+            translucent: false,
+            tint: -1,
+        });
+        let mut ctm = Ctm {
+            rules: vec![overlay],
+            by_state: vec![Vec::new(); 16],
+            block_of: (0..16).collect(),
+            axis: vec![0; 16],
+            ..Ctm::default()
+        };
+        ctm.by_state[5].push(0);
+        ctm
+    }
+
+    #[test]
+    fn a_fixed_overlay_is_drawn_over_the_face_not_instead_of_it() {
+        let ctm = overlay_ctm(Method::OverlayFixed, 1);
+        let q = quad(NORTH);
+        let at = |_: [i32; 3]| 0u32;
+        let query = Query {
+            state: 5,
+            layer: 1,
+            face: NORTH,
+            pos: [0, 0, 0],
+            quad: &q,
+            block_at: &at,
+        };
+        let mut out = Vec::new();
+        ctm.overlays(&query, &|_| (false, false), &mut out);
+        assert_eq!(
+            out,
+            vec![OverlayQuad {
+                layer: 100,
+                translucent: false,
+                tint: -1,
+            }]
+        );
+        // The base face keeps its own layer: the overlay rule never replaces it.
+        assert_eq!(ctm.resolve(&query), None);
+    }
+
+    #[test]
+    fn a_standard_overlay_draws_its_side_tile_when_all_four_sides_show_it() {
+        let ctm = overlay_ctm(Method::Overlay, 17);
+        let q = quad(NORTH);
+        // Full blocks beside the face (state 9), air in front of them (state 0).
+        let at = |o: [i32; 3]| match o {
+            [_, _, -1] => 0,
+            [_, _, 0] if o != [0, 0, 0] => 9,
+            _ => 5,
+        };
+        let query = Query {
+            state: 5,
+            layer: 1,
+            face: NORTH,
+            pos: [0, 0, 0],
+            quad: &q,
+            block_at: &at,
+        };
+        let mut out = Vec::new();
+        ctm.overlays(&query, &|s| (s == 10, s == 9 || s == 10), &mut out);
+        // Tile 8 is the middle one, with a side on all four sides (applications 0b1111).
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].layer, 108);
+    }
+
+    #[test]
+    fn a_solid_block_in_front_hides_the_standard_overlay() {
+        let ctm = overlay_ctm(Method::Overlay, 17);
+        let q = quad(NORTH);
+        // The same neighbours, but the block in front of every side is solid.
+        let at = |o: [i32; 3]| match o {
+            [_, _, -1] => 10,
+            [_, _, 0] if o != [0, 0, 0] => 9,
+            _ => 5,
+        };
+        let query = Query {
+            state: 5,
+            layer: 1,
+            face: NORTH,
+            pos: [0, 0, 0],
+            quad: &q,
+            block_at: &at,
+        };
+        let mut out = Vec::new();
+        ctm.overlays(&query, &|s| (s == 10, s == 9 || s == 10), &mut out);
+        assert!(out.is_empty());
     }
 }
