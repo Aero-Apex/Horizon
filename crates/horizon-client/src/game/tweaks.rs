@@ -11,9 +11,9 @@
 //!   second slot: each slot entered holding the same item is gathered into
 //!   the hand (when it all fits); with Shift, those slots are quick-moved.
 //! - Shift + left-drag with an empty hand: every slot entered is quick-moved.
-//! - The wheel over a slot, with an empty hand: down moves one of its items
-//!   to the other side (container and inventory, or hotbar and inventory),
-//!   up brings one of the same item back.
+//! - The wheel over a slot: down moves items of it to the other inventory (the container,
+//!   or the crafting grid), up brings items of the same kind back, as Mouse Tweaks'
+//!   `onMouseScrolled` does (`mouse_tweaks.rs`), with a stack in hand too.
 //!
 //! Sorting draws a small button by the container's title and one by the
 //! inventory's (an optional key sorts the part under the cursor); the
@@ -26,6 +26,7 @@ use horizon_client::{
     items::ItemStack,
     keybinds,
     menu::Input,
+    mouse_tweaks,
     stations::hover_name,
 };
 use winit::{event::MouseButton, keyboard::KeyCode};
@@ -36,8 +37,8 @@ const SORT_BUTTON: f32 = 9.0;
 #[derive(Default)]
 pub(super) struct Tweaks {
     drag: Option<Drag>,
-    /// Wheel steps not yet acted on (a trackpad scrolls in fractions).
-    wheel: f32,
+    /// Wheel distance not yet worth an item (a trackpad scrolls in fractions).
+    wheel: mouse_tweaks::Accumulator,
 }
 /// A drag the tweaks follow.
 #[derive(Clone, Debug)]
@@ -69,14 +70,15 @@ impl Game<'_> {
     }
     /// One ordinary click on a game slot. False when nothing took it.
     pub(super) fn tweak_click(&mut self, slot: usize, button: i32, input: Input) -> bool {
-        if self.remote.is_some() {
-            let ordinal = super::remote::input_ordinal(input);
-            return self.remote_slot_click(slot, button as i8, ordinal);
-        }
+        // On a server (the integrated one too) the click runs on the menu engine first and is
+        // sent with its predicted result, as a player's own click is, so the clicks that follow
+        // in the same frame see the hand and slots it left.
         if !self.menu_click(Some(slot), button, input) {
             return false;
         }
-        if let Some(key) = self.container {
+        if self.remote.is_none()
+            && let Some(key) = self.container
+        {
             self.container_changed(key);
         }
         true
@@ -93,7 +95,7 @@ impl Game<'_> {
         }
         let held = self.carried.clone();
         if right {
-            if shift || held.is_none() {
+            if shift || held.is_none() || !self.settings.extras.mouse_tweaks_rmb {
                 return false;
             }
             // RMB: the press places at once, then the drag goes on.
@@ -109,7 +111,8 @@ impl Game<'_> {
             self.tweaks.drag = Some(drag);
             return true;
         }
-        if held.is_some() || shift {
+        let e = &self.settings.extras;
+        if (held.is_some() && e.mouse_tweaks_lmb_item) || (shift && e.mouse_tweaks_lmb_empty) {
             self.tweaks.drag = Some(Drag {
                 right,
                 held,
@@ -188,96 +191,64 @@ impl Game<'_> {
     pub(super) fn tweak_release(&mut self) {
         self.tweaks.drag = None;
     }
-    /// The wheel over an inventory screen: true when the tweaks used it.
+    /// The slots the wheel works on, in the menu's order: the player's inventory (the main
+    /// inventory and hotbar), and the crafting grid or container across from it. Results,
+    /// armour and the off hand are left out: their clicks are not plain pick-ups here.
+    fn wheel_slots(&mut self) -> Vec<mouse_tweaks::Slot> {
+        let ids: Vec<usize> = self
+            .slots()
+            .into_iter()
+            .filter(|&s| s != 200 && s < 500 && s != 309)
+            .collect();
+        ids.into_iter()
+            .map(|id| mouse_tweaks::Slot {
+                id,
+                own: id < 36,
+                y: self.slot_position(id).1,
+                output: false,
+                stack: self.slot_view(id),
+            })
+            .collect()
+    }
+    /// The wheel over an inventory screen: true when the tweaks used it. Over any slot of the
+    /// menu it is always theirs, even when nothing moves, so the hotbar doesn't turn instead.
     pub(super) fn tweak_scroll(&mut self, delta: f32, slot: Option<usize>) -> bool {
-        if !self.settings.extras.mouse_tweaks_wheel || !self.tweaks_on() || self.carried.is_some() {
+        if !self.settings.extras.mouse_tweaks_wheel || !self.tweaks_on() {
             return false;
         }
-        let Some(slot) = slot.filter(|&s| s != 200) else {
-            self.tweaks.wheel = 0.0;
+        let slots = self.wheel_slots();
+        let Some(selected) = slot.and_then(|s| slots.iter().position(|v| v.id == s)) else {
+            self.tweaks.wheel.reset();
             return false;
         };
-        self.tweaks.wheel += delta;
-        let steps = self.tweaks.wheel.trunc();
-        self.tweaks.wheel -= steps;
-        for _ in 0..steps.abs() as u32 {
-            if steps < 0.0 {
-                self.tweak_push(slot);
-            } else {
-                self.tweak_pull(slot);
+        let e = &self.settings.extras;
+        let cfg = mouse_tweaks::Config {
+            order: e.mouse_tweaks_order,
+            direction: e.mouse_tweaks_direction,
+        };
+        let steps = self
+            .tweaks
+            .wheel
+            .feed(e.mouse_tweaks_scaling, f64::from(delta));
+        if steps == 0 {
+            return true;
+        }
+        let item_max = |s: &ItemStack| self.max_stack(s);
+        let rules = |id: usize, s: &ItemStack| self.slot_rules(id, s);
+        let mut menu = mouse_tweaks::Menu {
+            slots,
+            carried: self.carried.clone(),
+            item_max: &item_max,
+            rules: &rules,
+            clicks: Vec::new(),
+        };
+        let clicks = mouse_tweaks::plan_wheel(&mut menu, selected, steps, cfg);
+        for (slot, right) in clicks {
+            if !self.tweak_click(slot, i32::from(right), Input::Pickup) {
+                break;
             }
         }
         true
-    }
-    /// The slots across from `slot`, in quick-move order: a container's
-    /// go to the inventory (hotbar first, from the right), the inventory's
-    /// to the container; without one, hotbar and main inventory trade.
-    fn other_side(&self, slot: usize) -> Vec<usize> {
-        let container: Vec<usize> = self
-            .slots()
-            .into_iter()
-            .filter(|s| (300..500).contains(s))
-            .collect();
-        let player = || (0..9).rev().chain((9..36).rev());
-        match slot {
-            300..500 => player().collect(),
-            0..36 if !container.is_empty() => container,
-            0..9 => (9..36).collect(),
-            9..36 => (0..9).collect(),
-            _ => Vec::new(),
-        }
-    }
-    /// Wheel down: one item of `slot` to the other side, where a stack of
-    /// it has room, else to the first empty slot (`moveItemStackTo`).
-    fn tweak_push(&mut self, slot: usize) {
-        let Some(stack) = self.slot_view(slot) else {
-            return;
-        };
-        let max = self.max_stack(&stack);
-        let side = self.other_side(slot);
-        let views: Vec<(usize, Option<ItemStack>)> =
-            side.iter().map(|&s| (s, self.slot_view(s))).collect();
-        let target = views
-            .iter()
-            .find(|(_, v)| {
-                v.as_ref()
-                    .is_some_and(|v| v.same_item_same_components(&stack) && v.count < max)
-            })
-            .or_else(|| views.iter().find(|(_, v)| v.is_none()))
-            .map(|(s, _)| *s);
-        let Some(target) = target else {
-            return;
-        };
-        if self.tweak_click(slot, 0, Input::Pickup) {
-            self.tweak_click(target, 1, Input::Pickup);
-            if stack.count > 1 {
-                self.tweak_click(slot, 0, Input::Pickup);
-            }
-        }
-    }
-    /// Wheel up: one item of the same kind from the other side into `slot`.
-    fn tweak_pull(&mut self, slot: usize) {
-        let Some(stack) = self.slot_view(slot) else {
-            return;
-        };
-        if stack.count >= self.max_stack(&stack) {
-            return;
-        }
-        let side = self.other_side(slot);
-        let source = side.into_iter().find_map(|s| {
-            self.slot_view(s)
-                .filter(|v| v.same_item_same_components(&stack))
-                .map(|v| (s, v.count))
-        });
-        let Some((source, count)) = source else {
-            return;
-        };
-        if self.tweak_click(source, 0, Input::Pickup) {
-            self.tweak_click(slot, 1, Input::Pickup);
-            if count > 1 {
-                self.tweak_click(source, 0, Input::Pickup);
-            }
-        }
     }
 }
 

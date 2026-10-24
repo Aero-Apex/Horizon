@@ -82,3 +82,27 @@ The health and armor rows and the default colours of the Jade overlay (`jade.rs`
 the `jade:dark` theme), which is licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0
 (<https://creativecommons.org/licenses/by-nc-sa/4.0/>). That part of Horizon is therefore for
 non-commercial use, and changes to it must be shared under the same license.
+
+## Zoomify
+The zoom's easing and scrolling (`zoomify.rs`) are a Rust rewrite of
+[Zoomify](https://github.com/isXander/Zoomify) by isXander (`ZoomHelper`, `Interpolator`,
+`TransitionType`, `DefaultZoomHelpers`, and the mouse and camera mixins' formulas), under the GNU Lesser
+General Public License 3.0 or later. Its source is at the link; this project's changes are the rewrite itself.
+
+## Mouse Tweaks
+The inventory wheel (`mouse_tweaks.rs`) and the drags in `game/tweaks.rs` follow
+[Mouse Tweaks](https://github.com/YaLTeR/MouseTweaks) by Ivan Molodetskikh (YaLTeR) (`Main.onMouseScrolled`, `findPullSlot`,
+`findPushSlots`, `Config`), under the BSD 3-Clause License:
+
+> Copyright (c) 2023, Ivan Molodetskikh. All rights reserved. Redistribution and use in source and binary
+> forms, with or without modification, are permitted provided that the copyright notice, the list of
+> conditions and the disclaimer of the BSD 3-Clause License are kept; the names of the copyright holder and contributors may not be
+> used to endorse derived products without permission. THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY.
+
+## LambDynamicLights
+The dynamic light rules (`dynamic_light.rs`, `game/dynamic_lights.rs`: the item and entity table, the falloff
+and its 7.75 block radius) follow [LambDynamicLights](https://github.com/LambdAurora/LambDynamicLights) by
+LambdAurora, whose source is under **The Lambda License**. That license allows sharing and changing the
+source with the original authors listed, but **sharing binaries needs the authors' written approval**.
+Builds containing this port are for private use until that approval is given. Original:
+https://github.com/LambdAurora/LambDynamicLights/blob/26.3/LICENSE

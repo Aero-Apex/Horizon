@@ -9,7 +9,7 @@
 use crate::blocks::BlockFacts;
 use glam::DVec3;
 use horizon_world::registry::BlockRegistry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Lights the shaders read: `Globals.dynamic_lights` in gfx.rs, terrain.wgsl and entity.wgsl.
 pub const MAX: usize = 16;
@@ -18,36 +18,161 @@ pub const BURNING: u8 = 15;
 /// Sources farther than this from the camera light nothing it can see well.
 const REACH: f64 = 96.0;
 
-/// How brightly each item glows when held or dropped.
+/// LambDynamicLights' reach (`DynamicLightingEngine.MAX_RADIUS`): a source lights nothing past
+/// it, and its level falls by 15 over it (`SpatialLookupEntry.lightAtPos`).
+pub const RADIUS: f64 = 7.75;
+
+/// LambDynamicLights' own item table (`data/lambdynlights/dynamiclights/item`), the items that
+/// do not just glow like their block: (item, level, goes dark under water). `None` takes the
+/// level from the block, as its `block_self` does for torches and campfires.
+const ITEM_TABLE: &[(&str, Option<u8>, bool)] = &[
+    ("minecraft:blaze_powder", Some(10), false),
+    ("minecraft:blaze_rod", Some(10), false),
+    ("minecraft:campfire", None, true),
+    ("minecraft:soul_campfire", None, true),
+    ("minecraft:fire_charge", Some(10), true),
+    ("minecraft:glow_berries", Some(14), false),
+    ("minecraft:glow_ink_sac", Some(12), false),
+    ("minecraft:glowstone_dust", Some(10), false),
+    ("minecraft:lava_bucket", Some(15), true),
+    ("minecraft:nether_star", Some(8), false),
+    ("minecraft:prismarine_crystals", Some(10), false),
+    ("minecraft:spectral_arrow", Some(8), false),
+    ("minecraft:torch", None, true),
+    ("minecraft:redstone_torch", None, true),
+    ("minecraft:soul_torch", None, true),
+    ("minecraft:copper_torch", None, true),
+];
+
+/// How brightly each item glows when held, worn or dropped.
 #[derive(Debug, Default)]
-pub struct Luminance(HashMap<String, u8>);
+pub struct Luminance {
+    levels: HashMap<String, u8>,
+    /// Items that go dark when their holder's eyes, or the item, are in water.
+    water_sensitive: HashSet<&'static str>,
+}
 
 impl Luminance {
-    /// A block item glows like its block's default state (`getLightEmission`): torches 14,
-    /// lanterns and glowstone 15, a lit redstone torch 7; a furnace's item, unlit, not at all.
+    /// An item without an entry in LambDynamicLights' table glows like its block's default
+    /// state (`getLightEmission`): lanterns and glowstone 15; a furnace's item, unlit, not at
+    /// all. The table's items take its levels (`ITEM_TABLE`).
     pub fn new(facts: &BlockFacts, registry: &BlockRegistry) -> Self {
-        let mut map = HashMap::new();
+        let mut levels = HashMap::new();
         for (id, state) in facts.states.iter().enumerate() {
             if state.emission == 0 || *state.item != *state.name {
                 continue;
             }
             if registry.default_state(&state.name).map(|d| d.0 as usize) == Some(id) {
-                map.insert(state.item.to_string(), state.emission);
+                levels.insert(state.item.to_string(), state.emission);
             }
         }
-        // A bucket of lava glows as lava does.
-        map.insert("minecraft:lava_bucket".into(), 15);
-        Self(map)
+        Self::with_table(levels)
     }
 
+    fn with_table(mut levels: HashMap<String, u8>) -> Self {
+        let mut water_sensitive = HashSet::new();
+        for &(item, level, wet) in ITEM_TABLE {
+            match level {
+                Some(level) => {
+                    levels.insert(item.to_owned(), level);
+                }
+                None => {
+                    // `block_self`: the block's own level.
+                    levels.entry(item.to_owned()).or_insert(0);
+                }
+            }
+            if wet {
+                water_sensitive.insert(item);
+            }
+        }
+        Self {
+            levels,
+            water_sensitive,
+        }
+    }
+
+    /// The level of `item` held in the open air.
     pub fn of(&self, item: &str) -> u8 {
-        self.0.get(item).copied().unwrap_or(0)
+        self.in_fluid(item, false)
+    }
+
+    /// `ItemLightSourceManager.getLuminance(stack, submergedInWater)`: the items that need air
+    /// to burn give nothing when submerged.
+    pub fn in_fluid(&self, item: &str, submerged: bool) -> u8 {
+        if submerged && self.water_sensitive.contains(item) {
+            return 0;
+        }
+        self.levels.get(item).copied().unwrap_or(0)
     }
 
     #[cfg(test)]
     fn from_pairs(pairs: &[(&str, u8)]) -> Self {
-        Self(pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect())
+        Self::with_table(pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect())
     }
+}
+
+/// What the game knows of an entity for LambDynamicLights' per-type luminance
+/// (`data/lambdynlights/dynamiclights/entity`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Being {
+    /// `isInWaterOrRain`: a blaze is dimmer wet.
+    pub wet: bool,
+    /// A creeper's swelling (`getSwelling(0)`), 0 to 1.
+    pub swelling: f32,
+    /// The light of the block an enderman carries.
+    pub carried: u8,
+    /// A cube mob squashed past 0.6 (a magma cube then glows brighter).
+    pub squished: bool,
+}
+
+/// The level LambDynamicLights gives a living entity of `kind` for what it is, not what it
+/// holds: allays 8, blazes 10 (4 wet), magma cubes 8 or 11, glow squid 12, a creeper swelling
+/// up to 9, an enderman the light of its block. 0 for the rest.
+pub fn mob_level(kind: &str, being: Being) -> u8 {
+    match kind {
+        "minecraft:allay" => 8,
+        "minecraft:blaze" => {
+            if being.wet {
+                4
+            } else {
+                10
+            }
+        }
+        "minecraft:magma_cube" => {
+            if being.squished {
+                11
+            } else {
+                8
+            }
+        }
+        // Not hurt: its dark ticks are 0, so the full 12.
+        "minecraft:glow_squid" => 12,
+        "minecraft:creeper" => {
+            if being.swelling > 0.001 {
+                (being.swelling * 10.0) as u8
+            } else {
+                0
+            }
+        }
+        "minecraft:enderman" => being.carried,
+        _ => 0,
+    }
+}
+
+/// The level of a projectile of `kind`: fireballs 14 and 12 and wither skulls 12 (the fireballs
+/// not under water), an arrow of the item it was shot from (a spectral arrow 8), any of them 15
+/// on fire.
+pub fn projectile_level(kind: &str, in_water: bool, on_fire: bool, arrow_item: u8) -> u8 {
+    let own = match kind {
+        "fireball" if in_water => 0,
+        "fireball" => 14,
+        "small_fireball" if in_water => 0,
+        "small_fireball" => 12,
+        "wither_skull" => 12,
+        "arrow" => arrow_item,
+        _ => 0,
+    };
+    if on_fire { BURNING } else { own }
 }
 
 /// One light this frame: where it is (world space) and its level, 1 to 15.
@@ -77,9 +202,14 @@ pub fn select(sources: &[Source], camera: DVec3, out: &mut Vec<[f32; 4]>) {
 /// `dynamic_block_light` in Rust, for tests.
 pub fn level_at(pos: [f32; 3], lights: &[[f32; 4]]) -> f32 {
     lights.iter().fold(0.0f32, |level, l| {
-        let d =
-            ((pos[0] - l[0]).powi(2) + (pos[1] - l[1]).powi(2) + (pos[2] - l[2]).powi(2)).sqrt();
-        level.max(l[3] - d)
+        let d = f64::from(
+            ((pos[0] - l[0]).powi(2) + (pos[1] - l[1]).powi(2) + (pos[2] - l[2]).powi(2)).sqrt(),
+        );
+        if d <= RADIUS {
+            level.max(l[3] - (d / RADIUS * 15.0) as f32)
+        } else {
+            level
+        }
     })
 }
 
@@ -114,20 +244,71 @@ mod tests {
     }
 
     #[test]
-    fn light_falls_off_a_level_per_block() {
+    fn light_falls_like_lambdynamiclights() {
+        // luminance - distance / 7.75 * 15, and nothing past 7.75 blocks.
         let torch = [[0.0, 0.0, 0.0, 14.0]];
         assert_eq!(level_at([0.0, 0.0, 0.0], &torch), 14.0);
-        assert_eq!(level_at([3.0, 4.0, 0.0], &torch), 9.0);
-        assert_eq!(level_at([20.0, 0.0, 0.0], &torch), 0.0);
+        let at_five = level_at([3.0, 4.0, 0.0], &torch);
+        assert!((at_five - (14.0 - 5.0 / 7.75 * 15.0)).abs() < 1e-4, "{at_five}");
+        assert_eq!(level_at([7.76, 0.0, 0.0], &torch), 0.0);
+        // A 14 is out of light a little before the edge, a 15 just reaches it.
+        assert_eq!(level_at([7.7, 0.0, 0.0], &torch), 0.0);
+        assert!(level_at([7.0, 0.0, 0.0], &torch) > 0.0);
+        assert!(level_at([7.7, 0.0, 0.0], &[[0.0, 0.0, 0.0, 15.0]]) > 0.0);
         let two = [[0.0, 0.0, 0.0, 14.0], [10.0, 0.0, 0.0, 15.0]];
-        assert_eq!(level_at([8.0, 0.0, 0.0], &two), 13.0);
+        let a = level_at([8.0, 0.0, 0.0], &two);
+        assert!((a - (15.0 - 2.0 / 7.75 * 15.0)).abs() < 1e-4, "{a}");
         assert_eq!(level_at([0.0; 3], &[]), 0.0);
     }
 
     #[test]
     fn item_luminance() {
-        let l = Luminance::from_pairs(&[("minecraft:torch", 14)]);
+        let l = Luminance::from_pairs(&[("minecraft:torch", 14), ("minecraft:lantern", 15)]);
         assert_eq!(l.of("minecraft:torch"), 14);
         assert_eq!(l.of("minecraft:stone"), 0);
+        // The table's own items, and the ones that need air.
+        assert_eq!(l.of("minecraft:glow_berries"), 14);
+        assert_eq!(l.of("minecraft:glow_ink_sac"), 12);
+        assert_eq!(l.of("minecraft:nether_star"), 8);
+        assert_eq!(l.of("minecraft:blaze_rod"), 10);
+        assert_eq!(l.in_fluid("minecraft:torch", true), 0);
+        assert_eq!(l.in_fluid("minecraft:lava_bucket", true), 0);
+        assert_eq!(l.in_fluid("minecraft:lava_bucket", false), 15);
+        assert_eq!(l.in_fluid("minecraft:lantern", true), 15);
+        assert_eq!(l.in_fluid("minecraft:glow_berries", true), 14);
+    }
+
+    #[test]
+    fn entities_glow_by_type() {
+        let dry = Being::default();
+        assert_eq!(mob_level("minecraft:allay", dry), 8);
+        assert_eq!(mob_level("minecraft:blaze", dry), 10);
+        assert_eq!(mob_level("minecraft:blaze", Being { wet: true, ..dry }), 4);
+        assert_eq!(mob_level("minecraft:magma_cube", dry), 8);
+        assert_eq!(
+            mob_level("minecraft:magma_cube", Being { squished: true, ..dry }),
+            11
+        );
+        assert_eq!(mob_level("minecraft:glow_squid", dry), 12);
+        assert_eq!(mob_level("minecraft:creeper", dry), 0);
+        assert_eq!(
+            mob_level("minecraft:creeper", Being { swelling: 0.5, ..dry }),
+            5
+        );
+        assert_eq!(
+            mob_level("minecraft:enderman", Being { carried: 15, ..dry }),
+            15
+        );
+        assert_eq!(mob_level("minecraft:cow", dry), 0);
+    }
+
+    #[test]
+    fn projectiles_glow_unless_wet() {
+        assert_eq!(projectile_level("fireball", false, false, 0), 14);
+        assert_eq!(projectile_level("fireball", true, false, 0), 0);
+        assert_eq!(projectile_level("small_fireball", false, false, 0), 12);
+        assert_eq!(projectile_level("wither_skull", true, false, 0), 12);
+        assert_eq!(projectile_level("arrow", false, false, 8), 8);
+        assert_eq!(projectile_level("arrow", false, true, 0), BURNING);
     }
 }

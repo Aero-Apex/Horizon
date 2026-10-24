@@ -62,14 +62,19 @@ fn overlay_texel(overlay: u32) -> vec4<f32> {
     return vec4(1.0);
 }
 // Horizon Extras' dynamic lights (dynamic_light.rs): the block light, in the vertex's units
-// (16 per level), a vertex at camera-relative `pos` gets from the frame's light sources, one
-// level less per block. time.z of them are set: none when the extra is off, so no loop runs.
+// (16 per level), a vertex at camera-relative `pos` gets from the frame's light sources, as
+// LambDynamicLights' engine computes it. time.z of them are set: none when the extra is off, so no loop runs.
 fn dynamic_block_light(pos: vec3<f32>) -> f32 {
     let count = min(u32(globals.time.z), 16u);
     var level = 0.0;
     for (var i = 0u; i < count; i++) {
         let l = globals.dynamic_lights[i];
-        level = max(level, l.w - distance(pos, l.xyz));
+        // LambDynamicLights' `SpatialLookupEntry.lightAtPos`: nothing past 7.75 blocks, and
+        // 15 levels over that radius.
+        let d = distance(pos, l.xyz);
+        if d <= 7.75 {
+            level = max(level, l.w - d / 7.75 * 15.0);
+        }
     }
     return level * 16.0;
 }

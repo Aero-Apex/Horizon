@@ -4096,6 +4096,12 @@ impl Renderer {
                 let nether = i32::from(frame.shader.dimension == -1);
                 self.queue
                     .write_buffer(table, 4, bytemuck::bytes_of(&nether));
+                // The dynamic lights, for the pack's terrain glue (`dynamic_light.rs`).
+                self.queue.write_buffer(
+                    table,
+                    4 * java_terrain::LIGHTS_AT as u64,
+                    bytemuck::cast_slice(&java_terrain::light_words(frame.dynamic_lights)),
+                );
             }
         }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {

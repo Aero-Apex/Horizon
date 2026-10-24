@@ -13,6 +13,26 @@ use std::collections::BTreeMap;
 /// `TerrainVertex` in 32-bit words.
 const VERTEX_WORDS: u32 = 6;
 
+/// The glue table's words: [0] the atlas columns, [1] the Nether flag, [2] how many dynamic
+/// lights are set, [3..67) those lights (`dynamic_light::MAX` of camera-relative x, y, z and
+/// level as f32 bits), then each sprite layer's block id.
+pub const LIGHTS_AT: usize = 2;
+pub const LAYERS_AT: usize = LIGHTS_AT + 1 + crate::dynamic_light::MAX * 4;
+
+/// The table's light words for the frame's lights (`dynamic_light::select`), from word
+/// `LIGHTS_AT`: the count, then each light's position and level as f32 bits.
+pub fn light_words(lights: &[[f32; 4]]) -> [i32; 1 + crate::dynamic_light::MAX * 4] {
+    let mut out = [0i32; 1 + crate::dynamic_light::MAX * 4];
+    let n = lights.len().min(crate::dynamic_light::MAX);
+    out[0] = n as i32;
+    for (i, l) in lights.iter().take(n).enumerate() {
+        for (j, v) in l.iter().enumerate() {
+            out[1 + i * 4 + j] = v.to_bits() as i32;
+        }
+    }
+    out
+}
+
 /// The glue's declarations and `hz_vertex`; `HZ_ORIGIN_DECL` and
 /// `HZ_ORIGIN` are the variant's (instanced or flat draws).
 const GLUE: &str = r#"
@@ -34,6 +54,22 @@ vec2 hz_mid;
 vec2 hz_lightmap;
 float hz_block;
 vec3 hz_mid_block;
+// LambDynamicLights' light at the vertex, in lightmap units: the table's lights, nothing past
+// 7.75 blocks, 15 levels over that radius (`dynamic_light.rs`).
+float hz_dynamic_light(vec3 p) {
+    int count = min(hz_table[2], 16);
+    float level = 0.0;
+    for (int i = 0; i < count; i++) {
+        int b = 3 + i * 4;
+        vec3 lp = vec3(intBitsToFloat(hz_table[b]), intBitsToFloat(hz_table[b + 1]),
+            intBitsToFloat(hz_table[b + 2]));
+        float d = distance(p, lp);
+        if (d <= 7.75) {
+            level = max(level, intBitsToFloat(hz_table[b + 3]) - d / 7.75 * 15.0);
+        }
+    }
+    return level * 16.0;
+}
 vec3 hz_corner(uint v) {
     uint b = v * HZ_WORDSu;
     return vec3(uintBitsToFloat(hz_vertices[b]), uintBitsToFloat(hz_vertices[b + 1u]),
@@ -85,8 +121,8 @@ void hz_vertex() {
     hz_atlas = (cell + uv) / float(cols);
     hz_mid = (cell + 0.5) / float(cols);
     // Vanilla's UV2: block light, then sky light, 0..240.
-    hz_lightmap = vec2(float(hz_light.y), float(hz_light.x));
-    hz_block = float(hz_table[2 + layer]);
+    hz_lightmap = vec2(max(float(hz_light.y), hz_dynamic_light(hz_pos.xyz)), float(hz_light.x));
+    hz_block = float(hz_table[HZ_LAYERS + layer]);
     hz_mid_block = (floor(hz_position - hz_normal * 0.01) + 0.5 - hz_position) * 64.0;
 }
 "#;
@@ -106,6 +142,7 @@ pub fn glue(flat: bool, alpha_test: Option<f32>) -> Geometry {
     let vertex_glue = GLUE
         .replace("HZ_ORIGIN_DECL", decl)
         .replace("HZ_ORIGIN", origin)
+        .replace("HZ_LAYERS", &LAYERS_AT.to_string())
         .replace("HZ_WORDS", &VERTEX_WORDS.to_string());
     let lightmap = "vec4(hz_lightmap, 0.0, 1.0)";
     let attributes: BTreeMap<String, String> = [
@@ -137,17 +174,18 @@ pub fn glue(flat: bool, alpha_test: Option<f32>) -> Geometry {
     }
 }
 
-/// The glue's table: atlas columns, the Nether flag, then each sprite
-/// layer's block id from `block.properties` (-1 for blocks it doesn't
-/// list, as Iris).
+/// The glue's table: atlas columns, the Nether flag, the dynamic lights (none to start with:
+/// the frame writes them), then each sprite layer's block id from `block.properties` (-1 for
+/// blocks it doesn't list, as Iris).
 pub fn table(sprite_layers: &BTreeMap<String, u32>, block_ids: &BTreeMap<String, i32>) -> Vec<i32> {
     let layers = sprite_layers.values().max().map_or(0, |&m| m as usize + 1);
-    let mut out = vec![-1; layers + 2];
+    let mut out = vec![-1; layers + LAYERS_AT];
     out[0] = atlas_columns(layers as u32) as i32;
     out[1] = 0;
+    out[LIGHTS_AT..LAYERS_AT].fill(0);
     for (name, &layer) in sprite_layers {
         if let Some(id) = horizon_shaderpack::properties::sprite_block_id(name, block_ids) {
-            out[layer as usize + 2] = id;
+            out[layer as usize + LAYERS_AT] = id;
         }
     }
     out
@@ -660,7 +698,14 @@ void main() {
             .into_iter()
             .map(|(n, i)| (n.to_owned(), i))
             .collect();
-        assert_eq!(table(&layers, &ids), [2, 0, 10003, 8, -1, 7]);
+        let t = table(&layers, &ids);
+        assert_eq!(&t[..2], [2, 0]);
+        assert!(t[LIGHTS_AT..LAYERS_AT].iter().all(|&w| w == 0));
+        assert_eq!(&t[LAYERS_AT..], [10003, 8, -1, 7]);
+        let words = light_words(&[[1.0, 2.0, 3.0, 14.0]]);
+        assert_eq!(words[0], 1);
+        assert_eq!(f32::from_bits(words[4] as u32), 14.0);
+        assert_eq!(words.len(), LAYERS_AT - LIGHTS_AT);
         assert_eq!(atlas_columns(5), 3);
         assert_eq!(atlas_columns(0), 1);
     }

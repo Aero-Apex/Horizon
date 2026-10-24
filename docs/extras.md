@@ -48,40 +48,59 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
   time of day and effects. The brightness slider keeps its normal range.
 
 ### Dynamic lights (`dynamicLights`, default off)
-- A light source held by a player or mob (main or off hand), dropped as an item, or an entity on
-  fire lights the blocks, entities and hand around it, as LambDynamicLights and OptiFine do. Not
-  in vanilla; the idea is ported, not a mod's code (issue #814).
-- An item glows like its block's default state (`getLightEmission`): torches 14, lanterns,
-  glowstone, sea lanterns and jack o'lanterns 15, soul torches 10, a redstone torch 7; a lava bucket
-  15. An entity on fire gives 15.
+A port of LambdAurora's LambDynamicLights' rules, drawn by this client's own renderer. Not
+in vanilla.
+- **What lights**: the player and every mob, by what they hold or wear in any equipment slot (main
+  hand, off hand, head, chest, legs, feet) and by what they are; items dropped on the ground; fireballs,
+  wither skulls and arrows (spectral ones glow, burning ones give 15); falling glowing blocks; anything
+  on fire (15). A spectator gives nothing.
+- **Items**: the mod's own table first: blaze powder and rods 10, fire charges 10, glow berries 14,
+  glow ink sacs 12, glowstone dust 10, nether stars 8, prismarine crystals 10, spectral arrows 8, lava
+  buckets 15; torches and campfires glow like their block. Every other block item glows like its block's
+  default state (`getLightEmission`): lanterns, glowstone, sea lanterns 15.
+  Items that need air (torches, campfires, fire charges, lava buckets) go dark when the holder's eyes are in water.
+- **Mobs by type**: allays 8, blazes 10 (4 in water), magma cubes 8, glow squid 12, an
+  enderman the light of the block it carries, a creeper `(int)(swelling * 10)` as it swells.
+- **Falloff** is the engine's: `level - distance / 7.75 * 15`, and nothing past 7.75 blocks
+  (`SpatialLookupEntry.lightAtPos`). Entities light from their eyes (`getEyeY`).
 - Client-only, at render time: the light engine, meshes, saves and other players never see it.
-  Each frame the game picks the 16 sources nearest the camera (within 96 blocks,
-  `dynamic_light::select`); terrain.wgsl and entity.wgsl raise each vertex's block light to the
-  source's level minus its distance in blocks when that is brighter, then light it through the
-  lightmap as usual. The light doesn't stop at walls.
+  Each frame the game picks the 16 sources nearest the camera (`dynamic_light::select`);
+  terrain.wgsl and entity.wgsl raise each vertex's block light to the source's
+  level when that is brighter, then light it through the lightmap as usual. The light doesn't stop at walls.
+- Under a Java shader pack the lights reach the pack's terrain too: the glue that rebuilds the lightmap
+  coordinates (`gfx/java_terrain.rs`, `hz_dynamic_light`) reads the same 16 lights from its table, so the
+  pack's own lighting sees them as block light. Entities take them from entity.wgsl as always.
+- Not done: magma cubes' squish (they stay at 8), glow squid dark ticks, TNT fuse
+  lighting, minecarts' blocks, item frames, display entities, the mod's data pack format and its
+  chunk-rebuild scheduler (the light is applied per vertex, so nothing is rebuilt).
 - Off: nothing is gathered and the shaders' loop runs zero times (the count is 0), so it costs
-  nothing measurable (numbers in the pull request, #814).
+  nothing measurable.
+- Logic and tests: `dynamic_light.rs`; the game side `game/dynamic_lights.rs`.
 
 ### Zoom (`zoom`, default off)
-- Hold the zoom key (default **Z**, unused by every vanilla 26.3 key mapping; C
-  is `key.saveToolbarActivator`) to zoom. The key does nothing while zoom is off.
-- It zooms only while playing: in chat, signs, books, text fields and every
-  other screen the key is typed or handled as usual. The key is never taken
-  from vanilla's mappings: one bound to the same key still acts (a key bound
-  twice triggers both, as vanilla's do), and the Extras page marks the zoom key
-  "Also bound" and names the mapping.
-- Starts at the default level (4x, settable 2x to 10x); the scroll wheel changes
-  it while the key is held (and does not move the hotbar then).
-- **Smooth** (default on) goes through vanilla's own FOV easing: the zoom divides
-  the field-of-view modifier target `Camera.tickFov` eases toward, the path the
-  spyglass uses (`AbstractClientPlayer.getFieldOfViewModifier` returns 0.1 while
-  scoping). The modifier keeps vanilla's 0.1 floor, so 10x is the deepest zoom.
-  Off applies the zoom to the final FOV with no easing.
-- While scoping with a spyglass the zoom does nothing: the spyglass view and its
-  overlay stay exactly vanilla's.
-- **Slower turning** (default on) divides mouse turning by the zoom factor.
-- With zoom off (or the key up) the FOV target and mouse are vanilla's, bit for
-  bit; the FOV harness covers this.
+A port of isXander's Zoomify (LGPL-3.0-or-later): its `ZoomHelper`, interpolators and transition curves
+(`zoomify.rs`), with the mod's defaults.
+- **Zoom key** (default **Z**: C is vanilla's `key.saveToolbarActivator`): hold it to zoom, or set
+  "Zoom key behaviour" to Toggle. The key does nothing in chat, signs, books, text fields and every other
+  screen, and is never taken from vanilla's mappings (the Extras page marks it "Also bound").
+- **Initial zoom** 4x, **zoom in** 1 s and **zoom out** 0.5 s along the **ease out exponential** curve; all
+  14 of the mod's curves are there, in and out separately (re-pressing mid-way continues from where the
+  picture is, as the mod's `inverse` does).
+- **Scroll zoom**: the wheel while zooming takes one of ten steps further in or out, each multiplying
+  the zoom by 150% (the geometric `zoomPerStep`), eased by the mod's smoothness 70; scrolling out stops
+  at normal field of view. Steps are forgotten when the key is let go, unless "Keep scroll steps" is on.
+- The field of view is divided by the zoom (limited to 1x to 500x), the hand too ("Zoom the hand too"),
+  the mouse turns by `sensitivity / lerp(relative sensitivity, 1, zoom)`, and view bobbing is
+  divided by `lerp(0.2, 1, zoom)`.
+- **Secondary zoom** (default key **F6**): a second, slow zoom that eases in over 10 s to 4x and out over 1 s,
+  on top of the first.
+- Zoom combines with a spyglass as the mod's default "combine" does. Not done: the cinematic camera while
+  zooming, the other spyglass behaviours and overlay and sound options, the zoom in and out
+  key mappings, hiding the HUD in the secondary zoom, the demo screen and the mod's own config file.
+- Older `horizon-extras.txt` files load: `zoomSmooth:false` becomes instant transitions and
+  `zoomSensitivity:false` a relative sensitivity of 0.
+- With zoom off (or the key up and no steps), the divisor is exactly 1 and the field of view, hand,
+  mouse and bobbing are vanilla's, bit for bit.
 
 ### FPS counter (`fps`, default off)
 - A small "N fps" line in a corner (default top left), optionally followed by
@@ -124,25 +143,29 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
   written to disk.
 
 ### Mouse Tweaks controls (`mouseTweaks`, default off; `mouseTweaksWheel`, default on)
-In the player inventory and chest-like containers (chests, barrels, ender
-chests, shulker boxes, hoppers, dispensers), in singleplayer and on servers:
-- Right-drag holding a stack: one item goes into each slot entered, at once
+A port of YaLTeR's Mouse Tweaks (BSD 3-clause): the drags (`Main.onMouseDragged`) and the wheel
+(`Main.onMouseScrolled`, planned in `mouse_tweaks.rs`). In the player inventory and chest-like containers
+(chests, barrels, ender chests, shulker boxes, hoppers, dispensers), in singleplayer and on servers:
+- Right-drag holding a stack (`mouseTweaksRmb`): one item goes into each slot entered, at once
   (slots holding another item, or full, are skipped).
-- Left-drag holding a stack: each slot entered that holds the same item is
-  gathered into the hand, when it all fits. This takes over only while
-  vanilla's drag covers one slot, so a left-drag across empty slots still
-  splits the stack as vanilla does.
-- Shift + left-drag: every slot entered is quick-moved (with a stack in hand,
-  only the slots of its item).
-- The wheel over a slot, with an empty hand (`mouseTweaksWheel`): down moves
-  one item to the other side (container and inventory, or hotbar and main
-  inventory: to a stack of it with room, else the first empty slot, as
-  quick-move picks), up brings one of the same item back.
+- Left-drag holding a stack (`mouseTweaksLmbItem`): each slot entered that holds the same item is
+  gathered into the hand, when it all fits. This takes over only while vanilla's drag covers one slot,
+  so a left-drag across empty slots still splits the stack as vanilla does.
+- Shift + left-drag with an empty hand (`mouseTweaksLmbEmpty`): every slot entered is quick-moved;
+  holding a stack, only the slots of its item.
+- The wheel over a slot (`mouseTweaksWheel`) is the mod's: down moves items of it to the other inventory
+  (a container's to the player's inventory and the reverse, the inventory's to the crafting grid
+  in the inventory screen), up brings items of the same kind back. It works with a stack in hand
+  (put back after), moves as many items as it scrolled (or one: "Wheel items per tick"), looks for items
+  in the other inventory from its last slot (or first: "Wheel pulls from"), and can be inverted or follow
+  where the other inventory is on screen ("Wheel direction"). Over a slot the wheel is always the tweak's,
+  even when nothing moves, so the hotbar doesn't turn instead. Crafting results can't be taken this way.
 
 Every action is ordinary slot clicks (`ContainerClick` on a server), so a
 vanilla server sees nothing unusual. With the extra off, the hooks return at
 once and the screens click exactly as vanilla's (`tools/test_menu_click_parity.py`
-and the container screen tests are unchanged).
+and the container screen tests are unchanged). Not done: the other screens (furnace,
+crafting table, anvil and the rest), and the mod's ignore/disable annotations and API.
 
 ### Sorting (`sort`, default off; `sortKey`, unbound)
 - A small button right of the container's title (chests, barrels, ender
@@ -252,6 +275,12 @@ for each face's layer.
 `python tools/connected_glass.py` makes a pack of connected glass (plain and
 all stained colours) from the game's own textures into `resourcepacks/`; turn
 on "Horizon Connected Glass" in Resource Packs.
+
+Continuity's own default pack (its connected glass in every colour and the panes, bookshelves and the
+sandstone family, with its artwork and rules) is in the Continuity jar: `python tools/continuity_pack.py JAR`
+makes `resourcepacks/Continuity Default.zip` from it (the programmer art variants, which Continuity only
+applies with that resource pack, are left out). Turn it on in Resource Packs instead of "Horizon Connected
+Glass" (they cover the same glass).
 
 ## Shared rules
 

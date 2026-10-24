@@ -9,13 +9,18 @@ pub const FILE: &str = "horizon-extras.txt";
 pub const ZOOM_KEY: &str = "horizon.zoom";
 /// The same for the sort key.
 pub const SORT_KEY: &str = "horizon.sort";
-/// Zoom levels the default cycles through, and the wheel's limits.
-pub const ZOOM_LEVELS: [u8; 6] = [2, 3, 4, 6, 8, 10];
-pub const ZOOM_MIN: f32 = 1.25;
-/// `Camera.tickFov` keeps the field-of-view modifier at 0.1 or more.
-pub const ZOOM_MAX: f32 = 10.0;
-/// Each wheel step multiplies the zoom by this.
-const ZOOM_STEP: f32 = 1.25;
+/// The name the options screen uses while the secondary zoom key waits for a key.
+pub const ZOOM2_KEY: &str = "horizon.zoom2";
+/// What the zoom settings cycle through.
+pub const ZOOM_LEVELS: [i32; 11] = [2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 50];
+const ZOOM_TIMES: [f64; 7] = [0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0];
+const ZOOM_SLOW_IN: [f64; 6] = [1.0, 2.0, 5.0, 10.0, 20.0, 30.0];
+const ZOOM_SLOW_OUT: [f64; 5] = [0.5, 1.0, 2.0, 5.0, 10.0];
+const ZOOM_STEPS: [i32; 5] = [3, 5, 10, 15, 20];
+const ZOOM_PER_STEP: [i32; 5] = [110, 125, 150, 175, 200];
+const ZOOM_SMOOTH: [i32; 6] = [0, 25, 50, 70, 85, 100];
+const ZOOM_SENSITIVITY: [i32; 5] = [0, 25, 50, 75, 100];
+const ZOOM_SLOW_AMOUNT: [i32; 6] = [2, 3, 4, 6, 8, 16];
 
 /// The minimap's sizes in GUI pixels, and its zooms in blocks per pixel.
 pub const MINIMAP_SIZES: [(u8, &str); 3] = [(64, "Small"), (96, "Medium"), (128, "Large")];
@@ -74,12 +79,11 @@ pub struct Extras {
     pub zoom: bool,
     /// A vanilla key name (`key.keyboard.z`).
     pub zoom_key: String,
-    /// The zoom the key starts at.
-    pub zoom_level: u8,
-    /// Ease through vanilla's FOV easing (as the spyglass does).
-    pub zoom_smooth: bool,
-    /// Divide mouse turning by the zoom.
-    pub zoom_sensitivity: bool,
+    /// Zoomify's settings: the zoom the key starts at, how it eases in and out, the scroll
+    /// steps, hold or toggle, the mouse and bobbing scaling, the secondary zoom.
+    pub zoomify: crate::zoomify::Settings,
+    /// The secondary (slow, long) zoom's key, a vanilla key name.
+    pub zoom_secondary_key: String,
     pub fps: bool,
     pub fps_corner: Corner,
     /// Also show the minimum and 1% low.
@@ -103,6 +107,15 @@ pub struct Extras {
     pub mouse_tweaks: bool,
     /// With them, the wheel over a slot moves its items one at a time.
     pub mouse_tweaks_wheel: bool,
+    /// Mouse Tweaks' own settings: right-drag places one per slot, left-drag gathers the held
+    /// item, Shift + left-drag moves slots with an empty hand, which slots the wheel pulls
+    /// from first, which way it scrolls and how many items a tick moves.
+    pub mouse_tweaks_rmb: bool,
+    pub mouse_tweaks_lmb_item: bool,
+    pub mouse_tweaks_lmb_empty: bool,
+    pub mouse_tweaks_order: crate::mouse_tweaks::SearchOrder,
+    pub mouse_tweaks_direction: crate::mouse_tweaks::Direction,
+    pub mouse_tweaks_scaling: crate::mouse_tweaks::Scaling,
     /// AppleSkin: what food would do, drawn on the food and health bars, in
     /// tooltips and on F3 (`appleskin`).
     pub appleskin: bool,
@@ -152,9 +165,8 @@ impl Default for Extras {
             dynamic_lights: false,
             zoom: false,
             zoom_key: "key.keyboard.z".into(),
-            zoom_level: 4,
-            zoom_smooth: true,
-            zoom_sensitivity: true,
+            zoomify: crate::zoomify::Settings::default(),
+            zoom_secondary_key: "key.keyboard.f6".into(),
             fps: false,
             fps_corner: Corner::TopLeft,
             fps_lows: false,
@@ -170,6 +182,12 @@ impl Default for Extras {
             auto_reconnect: false,
             mouse_tweaks: false,
             mouse_tweaks_wheel: true,
+            mouse_tweaks_rmb: true,
+            mouse_tweaks_lmb_item: true,
+            mouse_tweaks_lmb_empty: true,
+            mouse_tweaks_order: Default::default(),
+            mouse_tweaks_direction: Default::default(),
+            mouse_tweaks_scaling: Default::default(),
             appleskin: false,
             appleskin_restored: true,
             appleskin_saturation: true,
@@ -195,6 +213,31 @@ fn bool_text(v: bool) -> &'static str {
     if v { "true" } else { "false" }
 }
 impl Extras {
+    /// The zoom's lines of the file, from `zoomLevel` on.
+    fn zoom_text(&self) -> String {
+        let z = &self.zoomify;
+        format!(
+            "zoomLevel:{}\nzoomInTime:{}\nzoomOutTime:{}\nzoomInTransition:{}\nzoomOutTransition:{}\nzoomHand:{}\nzoomRetain:{}\nzoomScroll:{}\nzoomScrollSteps:{}\nzoomPerStep:{}\nzoomScrollSmooth:{}\nzoomKeyBehaviour:{}\nzoomSensitivity:{}\nzoomBobbing:{}\nzoomSecondaryKey:{}\nzoomSecondaryAmount:{}\nzoomSecondaryIn:{}\nzoomSecondaryOut:{}\n",
+            z.initial_zoom,
+            z.zoom_in_time,
+            z.zoom_out_time,
+            z.zoom_in_transition.name(),
+            z.zoom_out_transition.name(),
+            bool_text(z.affect_hand_fov),
+            bool_text(z.retain_zoom_steps),
+            bool_text(z.scroll_zoom),
+            z.scroll_step_count,
+            z.zoom_per_step,
+            z.scroll_zoom_smoothness,
+            z.key_behaviour.name(),
+            z.relative_sensitivity,
+            bool_text(z.relative_view_bobbing),
+            self.zoom_secondary_key,
+            z.secondary_zoom_amount,
+            z.secondary_zoom_in_time,
+            z.secondary_zoom_out_time,
+        )
+    }
     pub fn load(dir: &Path) -> Self {
         fs::read_to_string(dir.join(FILE))
             .map(|t| Self::parse(&t))
@@ -217,13 +260,93 @@ impl Extras {
                 "dynamicLights" => e.dynamic_lights = flag(e.dynamic_lights),
                 "zoom" => e.zoom = flag(e.zoom),
                 "zoomKey" if value.starts_with("key.") => e.zoom_key = value.to_owned(),
+                "zoomSecondaryKey" if value.starts_with("key.") => {
+                    e.zoom_secondary_key = value.to_owned()
+                }
                 "zoomLevel" => {
-                    if let Ok(v) = value.parse::<u8>() {
-                        e.zoom_level = v.clamp(2, ZOOM_MAX as u8);
+                    if let Ok(v) = value.parse::<i32>() {
+                        e.zoomify.initial_zoom = v.clamp(2, 50);
                     }
                 }
-                "zoomSmooth" => e.zoom_smooth = flag(e.zoom_smooth),
-                "zoomSensitivity" => e.zoom_sensitivity = flag(e.zoom_sensitivity),
+                // The settings before Zoomify's: smooth off meant no easing, slower turning off
+                // no relative sensitivity.
+                "zoomSmooth" => {
+                    if value == "false" {
+                        e.zoomify.zoom_in_transition = crate::zoomify::Transition::Instant;
+                        e.zoomify.zoom_out_transition = crate::zoomify::Transition::Instant;
+                    }
+                }
+                "zoomSensitivity" => match value {
+                    "true" => e.zoomify.relative_sensitivity = 100,
+                    "false" => e.zoomify.relative_sensitivity = 0,
+                    v => {
+                        if let Ok(v) = v.parse::<i32>() {
+                            e.zoomify.relative_sensitivity = v.clamp(0, 100);
+                        }
+                    }
+                },
+                "zoomInTime" => {
+                    if let Ok(v) = value.parse::<f64>() {
+                        e.zoomify.zoom_in_time = v.clamp(0.0, 30.0);
+                    }
+                }
+                "zoomOutTime" => {
+                    if let Ok(v) = value.parse::<f64>() {
+                        e.zoomify.zoom_out_time = v.clamp(0.0, 30.0);
+                    }
+                }
+                "zoomInTransition" => {
+                    e.zoomify.zoom_in_transition = crate::zoomify::Transition::parse(
+                        value,
+                        e.zoomify.zoom_in_transition,
+                    )
+                }
+                "zoomOutTransition" => {
+                    e.zoomify.zoom_out_transition = crate::zoomify::Transition::parse(
+                        value,
+                        e.zoomify.zoom_out_transition,
+                    )
+                }
+                "zoomHand" => e.zoomify.affect_hand_fov = flag(e.zoomify.affect_hand_fov),
+                "zoomRetain" => e.zoomify.retain_zoom_steps = flag(e.zoomify.retain_zoom_steps),
+                "zoomScroll" => e.zoomify.scroll_zoom = flag(e.zoomify.scroll_zoom),
+                "zoomScrollSteps" => {
+                    if let Ok(v) = value.parse::<i32>() {
+                        e.zoomify.scroll_step_count = v.clamp(1, 30);
+                    }
+                }
+                "zoomPerStep" => {
+                    if let Ok(v) = value.parse::<i32>() {
+                        e.zoomify.zoom_per_step = v.clamp(101, 400);
+                    }
+                }
+                "zoomScrollSmooth" => {
+                    if let Ok(v) = value.parse::<i32>() {
+                        e.zoomify.scroll_zoom_smoothness = v.clamp(0, 100);
+                    }
+                }
+                "zoomKeyBehaviour" => {
+                    e.zoomify.key_behaviour =
+                        crate::zoomify::KeyBehaviour::parse(value, e.zoomify.key_behaviour)
+                }
+                "zoomBobbing" => {
+                    e.zoomify.relative_view_bobbing = flag(e.zoomify.relative_view_bobbing)
+                }
+                "zoomSecondaryAmount" => {
+                    if let Ok(v) = value.parse::<i32>() {
+                        e.zoomify.secondary_zoom_amount = v.clamp(2, 50);
+                    }
+                }
+                "zoomSecondaryIn" => {
+                    if let Ok(v) = value.parse::<f64>() {
+                        e.zoomify.secondary_zoom_in_time = v.clamp(0.0, 60.0);
+                    }
+                }
+                "zoomSecondaryOut" => {
+                    if let Ok(v) = value.parse::<f64>() {
+                        e.zoomify.secondary_zoom_out_time = v.clamp(0.0, 60.0);
+                    }
+                }
                 "fps" => e.fps = flag(e.fps),
                 "fpsCorner" => e.fps_corner = Corner::parse(value, e.fps_corner),
                 "fpsLows" => e.fps_lows = flag(e.fps_lows),
@@ -249,6 +372,21 @@ impl Extras {
                 "autoReconnect" => e.auto_reconnect = flag(e.auto_reconnect),
                 "mouseTweaks" => e.mouse_tweaks = flag(e.mouse_tweaks),
                 "mouseTweaksWheel" => e.mouse_tweaks_wheel = flag(e.mouse_tweaks_wheel),
+                "mouseTweaksRmb" => e.mouse_tweaks_rmb = flag(e.mouse_tweaks_rmb),
+                "mouseTweaksLmbItem" => e.mouse_tweaks_lmb_item = flag(e.mouse_tweaks_lmb_item),
+                "mouseTweaksLmbEmpty" => e.mouse_tweaks_lmb_empty = flag(e.mouse_tweaks_lmb_empty),
+                "mouseTweaksOrder" => {
+                    e.mouse_tweaks_order =
+                        crate::mouse_tweaks::SearchOrder::parse(value, e.mouse_tweaks_order)
+                }
+                "mouseTweaksDirection" => {
+                    e.mouse_tweaks_direction =
+                        crate::mouse_tweaks::Direction::parse(value, e.mouse_tweaks_direction)
+                }
+                "mouseTweaksScaling" => {
+                    e.mouse_tweaks_scaling =
+                        crate::mouse_tweaks::Scaling::parse(value, e.mouse_tweaks_scaling)
+                }
                 "appleSkin" => e.appleskin = flag(e.appleskin),
                 "appleSkinRestored" => e.appleskin_restored = flag(e.appleskin_restored),
                 "appleSkinSaturation" => e.appleskin_saturation = flag(e.appleskin_saturation),
@@ -276,14 +414,12 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nappleSkin:{}\nappleSkinRestored:{}\nappleSkinSaturation:{}\nappleSkinExhaustion:{}\nappleSkinHealth:{}\nappleSkinTooltips:{}\nappleSkinTooltipsAlways:{}\nappleSkinOffhand:{}\nappleSkinDebug:{}\njade:{}\njadeHarvest:{}\njadeDetails:{}\njei:{}\ncontrolling:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\n",
+            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\n{}fps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nmouseTweaksRmb:{}\nmouseTweaksLmbItem:{}\nmouseTweaksLmbEmpty:{}\nmouseTweaksOrder:{}\nmouseTweaksDirection:{}\nmouseTweaksScaling:{}\nappleSkin:{}\nappleSkinRestored:{}\nappleSkinSaturation:{}\nappleSkinExhaustion:{}\nappleSkinHealth:{}\nappleSkinTooltips:{}\nappleSkinTooltipsAlways:{}\nappleSkinOffhand:{}\nappleSkinDebug:{}\njade:{}\njadeHarvest:{}\njadeDetails:{}\njei:{}\ncontrolling:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\n",
             bool_text(self.fullbright),
             bool_text(self.dynamic_lights),
             bool_text(self.zoom),
             self.zoom_key,
-            self.zoom_level,
-            bool_text(self.zoom_smooth),
-            bool_text(self.zoom_sensitivity),
+            self.zoom_text(),
             bool_text(self.fps),
             self.fps_corner.name(),
             bool_text(self.fps_lows),
@@ -303,6 +439,12 @@ impl Extras {
             bool_text(self.auto_reconnect),
             bool_text(self.mouse_tweaks),
             bool_text(self.mouse_tweaks_wheel),
+            bool_text(self.mouse_tweaks_rmb),
+            bool_text(self.mouse_tweaks_lmb_item),
+            bool_text(self.mouse_tweaks_lmb_empty),
+            self.mouse_tweaks_order.name(),
+            self.mouse_tweaks_direction.name(),
+            self.mouse_tweaks_scaling.name(),
             bool_text(self.appleskin),
             bool_text(self.appleskin_restored),
             bool_text(self.appleskin_saturation),
@@ -329,6 +471,7 @@ impl Extras {
     pub fn set_key(&mut self, name: &str, value: String) -> bool {
         match name {
             ZOOM_KEY => self.zoom_key = value,
+            ZOOM2_KEY => self.zoom_secondary_key = value,
             SORT_KEY => self.sort_key = value,
             _ => return false,
         }
@@ -345,60 +488,6 @@ impl Extras {
     }
 }
 
-/// The zoom key's state: held or not, and the zoom the wheel has set.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Zoom {
-    held: bool,
-    factor: f32,
-}
-impl Default for Zoom {
-    fn default() -> Self {
-        Self {
-            held: false,
-            factor: 1.0,
-        }
-    }
-}
-impl Zoom {
-    /// The key went down: start at the default level.
-    pub fn press(&mut self, level: u8) {
-        self.held = true;
-        self.factor = f32::from(level).clamp(ZOOM_MIN, ZOOM_MAX);
-    }
-    pub fn release(&mut self) {
-        self.held = false;
-    }
-    /// A press or release of the zoom key. Only a press while `playing` (no
-    /// screen or text field open) zooms; anywhere else the key belongs to
-    /// the screen, and the zoom lets go.
-    pub fn key(&mut self, pressed: bool, repeat: bool, playing: bool, level: u8) {
-        if !pressed || !playing {
-            self.release();
-        } else if !repeat {
-            self.press(level);
-        }
-    }
-    pub fn held(&self) -> bool {
-        self.held
-    }
-    /// Wheel steps while held (positive zooms in); false when not zooming.
-    pub fn scroll(&mut self, steps: f32) -> bool {
-        if !self.held {
-            return false;
-        }
-        self.factor = (self.factor * ZOOM_STEP.powf(steps)).clamp(ZOOM_MIN, ZOOM_MAX);
-        true
-    }
-    /// The zoom in effect: 1 when the key is up or the spyglass is in use
-    /// (scoping keeps vanilla's spyglass view).
-    pub fn factor(&self, scoping: bool) -> f32 {
-        if self.held && !scoping {
-            self.factor
-        } else {
-            1.0
-        }
-    }
-}
 /// Vanilla key mappings bound to the zoom key. The key still reaches them
 /// (a key bound twice triggers both, as vanilla's do), so the Extras page
 /// says so.
@@ -412,20 +501,6 @@ pub fn zoom_key_conflicts(e: &Extras, keys: &crate::keybinds::KeyBinds) -> Vec<&
         .filter(|name| keys.get(name) == e.zoom_key)
         .collect()
 }
-/// The field-of-view modifier target `Camera.tickFov` eases toward: vanilla's
-/// (`getFieldOfViewModifier`) divided by the zoom. A zoom of 1 leaves it as is.
-pub fn fov_target(vanilla: f32, zoom: f32) -> f32 {
-    if zoom == 1.0 { vanilla } else { vanilla / zoom }
-}
-/// The mouse turning scale while zoomed.
-pub fn turn_scale(zoom: f32, lower_sensitivity: bool) -> f64 {
-    if lower_sensitivity && zoom > 1.0 {
-        1.0 / f64::from(zoom)
-    } else {
-        1.0
-    }
-}
-
 /// Frame times over the last few seconds: frames per second, the minimum
 /// and the 1% low, recomputed twice a second.
 pub struct FpsCounter {
@@ -520,8 +595,23 @@ pub enum Item {
     Zoom,
     ZoomKey,
     ZoomLevel,
-    ZoomSmooth,
+    ZoomInTime,
+    ZoomOutTime,
+    ZoomInTransition,
+    ZoomOutTransition,
+    ZoomToggle,
+    ZoomScroll,
+    ZoomScrollSteps,
+    ZoomPerStep,
+    ZoomScrollSmooth,
+    ZoomRetain,
+    ZoomHand,
     ZoomSensitivity,
+    ZoomBobbing,
+    ZoomSecondaryKey,
+    ZoomSecondaryAmount,
+    ZoomSecondaryIn,
+    ZoomSecondaryOut,
     Fps,
     FpsCorner,
     FpsLows,
@@ -537,6 +627,12 @@ pub enum Item {
     AutoReconnect,
     MouseTweaks,
     MouseTweaksWheel,
+    MouseTweaksRmb,
+    MouseTweaksLmbItem,
+    MouseTweaksLmbEmpty,
+    MouseTweaksOrder,
+    MouseTweaksDirection,
+    MouseTweaksScaling,
     AppleSkin,
     AppleSkinRestored,
     AppleSkinSaturation,
@@ -568,8 +664,23 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(Zoom),
         Ok(ZoomKey),
         Ok(ZoomLevel),
-        Ok(ZoomSmooth),
+        Ok(ZoomToggle),
+        Ok(ZoomInTime),
+        Ok(ZoomInTransition),
+        Ok(ZoomOutTime),
+        Ok(ZoomOutTransition),
+        Ok(ZoomScroll),
+        Ok(ZoomScrollSteps),
+        Ok(ZoomPerStep),
+        Ok(ZoomScrollSmooth),
+        Ok(ZoomRetain),
+        Ok(ZoomHand),
         Ok(ZoomSensitivity),
+        Ok(ZoomBobbing),
+        Ok(ZoomSecondaryKey),
+        Ok(ZoomSecondaryAmount),
+        Ok(ZoomSecondaryIn),
+        Ok(ZoomSecondaryOut),
         Err("Minimap"),
         Ok(Minimap),
         Ok(MinimapCorner),
@@ -606,11 +717,25 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Err("Inventory"),
         Ok(MouseTweaks),
         Ok(MouseTweaksWheel),
+        Ok(MouseTweaksRmb),
+        Ok(MouseTweaksLmbItem),
+        Ok(MouseTweaksLmbEmpty),
+        Ok(MouseTweaksOrder),
+        Ok(MouseTweaksDirection),
+        Ok(MouseTweaksScaling),
         Ok(Sort),
         Ok(SortKey),
         Err("Multiplayer"),
         Ok(AutoReconnect),
     ]
+}
+/// "1 second", "½ s".
+fn seconds(t: f64) -> String {
+    if t == 0.0 {
+        "Instant".into()
+    } else {
+        format!("{t} s")
+    }
 }
 /// "1 block", "2 blocks", "½ block".
 fn block_count(n: f32) -> String {
@@ -634,9 +759,24 @@ impl Item {
             Item::DynamicLights => "Dynamic lights",
             Item::Zoom => "Zoom",
             Item::ZoomKey => "Zoom key",
-            Item::ZoomLevel => "Starting zoom",
-            Item::ZoomSmooth => "Smooth zoom",
-            Item::ZoomSensitivity => "Slower turning",
+            Item::ZoomLevel => "Initial zoom",
+            Item::ZoomInTime => "Zoom in time",
+            Item::ZoomOutTime => "Zoom out time",
+            Item::ZoomInTransition => "Zoom in transition",
+            Item::ZoomOutTransition => "Zoom out transition",
+            Item::ZoomToggle => "Zoom key behaviour",
+            Item::ZoomScroll => "Scroll zoom",
+            Item::ZoomScrollSteps => "Scroll steps",
+            Item::ZoomPerStep => "Zoom per step",
+            Item::ZoomScrollSmooth => "Scroll smoothness",
+            Item::ZoomRetain => "Keep scroll steps",
+            Item::ZoomHand => "Zoom the hand too",
+            Item::ZoomSensitivity => "Relative sensitivity",
+            Item::ZoomBobbing => "Relative view bobbing",
+            Item::ZoomSecondaryKey => "Secondary zoom key",
+            Item::ZoomSecondaryAmount => "Secondary zoom",
+            Item::ZoomSecondaryIn => "Secondary zoom in time",
+            Item::ZoomSecondaryOut => "Secondary zoom out time",
             Item::Fps => "FPS counter",
             Item::FpsCorner | Item::KeystrokesCorner | Item::MinimapCorner => "Corner",
             Item::Minimap => "Minimap",
@@ -647,6 +787,12 @@ impl Item {
             Item::AutoReconnect => "Auto-reconnect",
             Item::MouseTweaks => "Mouse Tweaks controls",
             Item::MouseTweaksWheel => "Scroll wheel moves items",
+            Item::MouseTweaksRmb => "Right-drag places one per slot",
+            Item::MouseTweaksLmbItem => "Left-drag gathers the held item",
+            Item::MouseTweaksLmbEmpty => "Shift + left-drag moves slots",
+            Item::MouseTweaksOrder => "Wheel pulls from",
+            Item::MouseTweaksDirection => "Wheel direction",
+            Item::MouseTweaksScaling => "Wheel items per tick",
             Item::AppleSkin => "AppleSkin",
             Item::AppleSkinRestored => "Hunger preview",
             Item::AppleSkinSaturation => "Saturation outlines",
@@ -674,11 +820,15 @@ impl Item {
     pub fn parent(self) -> Option<Item> {
         use Item::*;
         Some(match self {
-            ZoomKey | ZoomLevel | ZoomSmooth | ZoomSensitivity => Zoom,
+            ZoomKey | ZoomLevel | ZoomInTime | ZoomOutTime | ZoomInTransition
+            | ZoomOutTransition | ZoomToggle | ZoomScroll | ZoomScrollSteps | ZoomPerStep
+            | ZoomScrollSmooth | ZoomRetain | ZoomHand | ZoomSensitivity | ZoomBobbing
+            | ZoomSecondaryKey | ZoomSecondaryAmount | ZoomSecondaryIn | ZoomSecondaryOut => Zoom,
             MinimapCorner | MinimapSize | MinimapShape | MinimapZoom | MinimapRotate => Minimap,
             FpsCorner | FpsLows => Fps,
             KeystrokesCorner | KeystrokesCps => Keystrokes,
-            MouseTweaksWheel => MouseTweaks,
+            MouseTweaksWheel | MouseTweaksRmb | MouseTweaksLmbItem | MouseTweaksLmbEmpty
+            | MouseTweaksOrder | MouseTweaksDirection | MouseTweaksScaling => MouseTweaks,
             AppleSkinRestored | AppleSkinSaturation | AppleSkinExhaustion | AppleSkinHealth
             | AppleSkinTooltips | AppleSkinTooltipsAlways | AppleSkinOffhand | AppleSkinDebug => {
                 AppleSkin
@@ -698,11 +848,30 @@ impl Item {
             Item::DynamicLights => {
                 "Torches and other light sources held, dropped or on fire light the blocks around them."
             }
-            Item::Zoom => "Hold the zoom key to zoom; the wheel changes it while held.",
+            Item::Zoom => {
+                "Zoom with the zoom key; the wheel steps the zoom further while it is down. A rewrite of Zoomify."
+            }
             Item::ZoomKey => "Click, then press a key. Escape unbinds it.",
-            Item::ZoomLevel => "The zoom the key starts at.",
-            Item::ZoomSmooth => "Eases in and out like the spyglass.",
-            Item::ZoomSensitivity => "Turns slower the more you zoom in.",
+            Item::ZoomLevel => "How far the key zooms in: the field of view is divided by this.",
+            Item::ZoomInTime => "Seconds the zoom takes to ease in.",
+            Item::ZoomOutTime => "Seconds the zoom takes to ease back out.",
+            Item::ZoomInTransition => "The curve the zoom follows going in.",
+            Item::ZoomOutTransition => "The curve the zoom follows coming out.",
+            Item::ZoomToggle => "Hold: zoom while the key is down. Toggle: press to zoom, press to stop.",
+            Item::ZoomScroll => "The wheel zooms in and out in steps while you zoom, instead of the hotbar.",
+            Item::ZoomScrollSteps => "How many steps the wheel can zoom further in.",
+            Item::ZoomPerStep => "How much each step multiplies the zoom.",
+            Item::ZoomScrollSmooth => "How smoothly the steps ease; 100 is the smoothest.",
+            Item::ZoomRetain => "Remembers the scroll steps after you let go of the key.",
+            Item::ZoomHand => "Your hand and held item zoom with the world.",
+            Item::ZoomSensitivity => {
+                "How much the mouse slows with the zoom: 100 turns as slowly as the view moves, 0 not at all."
+            }
+            Item::ZoomBobbing => "View bobbing shrinks while zoomed in.",
+            Item::ZoomSecondaryKey => "A second zoom that eases in slowly. Click, then press a key.",
+            Item::ZoomSecondaryAmount => "How far the secondary zoom goes.",
+            Item::ZoomSecondaryIn => "Seconds the secondary zoom takes to go in.",
+            Item::ZoomSecondaryOut => "Seconds the secondary zoom takes to come out.",
             Item::Fps => "Frames per second in a corner of the screen.",
             Item::FpsCorner | Item::KeystrokesCorner | Item::MinimapCorner => {
                 "Overlays in one corner stack."
@@ -720,7 +889,25 @@ impl Item {
                 "Right-drag places one per slot, left-drag gathers the held item, Shift + left-drag moves every slot."
             }
             Item::MouseTweaksWheel => {
-                "Down sends one item of the slot to the other side, up brings one back."
+                "Down sends one item of the slot to the other inventory, up brings one back. Works with a stack in hand too."
+            }
+            Item::MouseTweaksRmb => {
+                "Holding a stack, right-drag over slots to put one item in each."
+            }
+            Item::MouseTweaksLmbItem => {
+                "Holding a stack, left-drag over slots of the same item to gather them into your hand."
+            }
+            Item::MouseTweaksLmbEmpty => {
+                "With an empty hand, Shift + left-drag over slots to move each one to the other inventory."
+            }
+            Item::MouseTweaksOrder => {
+                "Which end of the other inventory the wheel takes items from first."
+            }
+            Item::MouseTweaksDirection => {
+                "Normal: down moves items out. Inverted flips it. Position aware: down moves items away from the other inventory's side of the screen."
+            }
+            Item::MouseTweaksScaling => {
+                "Proportional moves as many items as the wheel scrolled; always one moves one per tick."
             }
             Item::AppleSkin => {
                 "Shows what food would do: on the food and health bars, in tooltips and on F3. A rewrite of the Java mod."
@@ -790,8 +977,10 @@ impl Item {
             Item::Fullbright => e.fullbright,
             Item::DynamicLights => e.dynamic_lights,
             Item::Zoom => e.zoom,
-            Item::ZoomSmooth => e.zoom_smooth,
-            Item::ZoomSensitivity => e.zoom_sensitivity,
+            Item::ZoomScroll => e.zoomify.scroll_zoom,
+            Item::ZoomRetain => e.zoomify.retain_zoom_steps,
+            Item::ZoomHand => e.zoomify.affect_hand_fov,
+            Item::ZoomBobbing => e.zoomify.relative_view_bobbing,
             Item::Fps => e.fps,
             Item::FpsLows => e.fps_lows,
             Item::Keystrokes => e.keystrokes,
@@ -801,6 +990,9 @@ impl Item {
             Item::AutoReconnect => e.auto_reconnect,
             Item::MouseTweaks => e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel,
+            Item::MouseTweaksRmb => e.mouse_tweaks_rmb,
+            Item::MouseTweaksLmbItem => e.mouse_tweaks_lmb_item,
+            Item::MouseTweaksLmbEmpty => e.mouse_tweaks_lmb_empty,
             Item::AppleSkin => e.appleskin,
             Item::AppleSkinRestored => e.appleskin_restored,
             Item::AppleSkinSaturation => e.appleskin_saturation,
@@ -826,7 +1018,22 @@ impl Item {
         match self {
             Item::ZoomKey => crate::keybinds::display_name(&e.zoom_key).plain(),
             Item::SortKey => crate::keybinds::display_name(&e.sort_key).plain(),
-            Item::ZoomLevel => format!("{}x", e.zoom_level),
+            Item::ZoomLevel => format!("{}x", e.zoomify.initial_zoom),
+            Item::ZoomInTime => seconds(e.zoomify.zoom_in_time),
+            Item::ZoomOutTime => seconds(e.zoomify.zoom_out_time),
+            Item::ZoomInTransition => e.zoomify.zoom_in_transition.label().into(),
+            Item::ZoomOutTransition => e.zoomify.zoom_out_transition.label().into(),
+            Item::ZoomToggle => e.zoomify.key_behaviour.label().into(),
+            Item::ZoomScrollSteps => e.zoomify.scroll_step_count.to_string(),
+            Item::ZoomPerStep => format!("{}%", e.zoomify.zoom_per_step),
+            Item::ZoomScrollSmooth => format!("{}%", e.zoomify.scroll_zoom_smoothness),
+            Item::ZoomSensitivity => format!("{}%", e.zoomify.relative_sensitivity),
+            Item::ZoomSecondaryKey => {
+                crate::keybinds::display_name(&e.zoom_secondary_key).plain()
+            }
+            Item::ZoomSecondaryAmount => format!("{}x", e.zoomify.secondary_zoom_amount),
+            Item::ZoomSecondaryIn => seconds(e.zoomify.secondary_zoom_in_time),
+            Item::ZoomSecondaryOut => seconds(e.zoomify.secondary_zoom_out_time),
             Item::FpsCorner => e.fps_corner.label().into(),
             Item::KeystrokesCorner => e.keystrokes_corner.label().into(),
             Item::MinimapCorner => e.minimap_corner.label().into(),
@@ -837,6 +1044,9 @@ impl Item {
                 .into(),
             Item::MinimapShape => if e.minimap_round { "Round" } else { "Square" }.into(),
             Item::MinimapZoom => format!("{} per pixel", block_count(e.minimap_zoom)),
+            Item::MouseTweaksOrder => e.mouse_tweaks_order.label().into(),
+            Item::MouseTweaksDirection => e.mouse_tweaks_direction.label().into(),
+            Item::MouseTweaksScaling => e.mouse_tweaks_scaling.label().into(),
             other => match other.switch(e) {
                 Some(true) => "On".into(),
                 _ => "Off".into(),
@@ -849,13 +1059,73 @@ impl Item {
             Item::Fullbright => e.fullbright = !e.fullbright,
             Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
             Item::Zoom => e.zoom = !e.zoom,
-            Item::ZoomSmooth => e.zoom_smooth = !e.zoom_smooth,
-            Item::ZoomSensitivity => e.zoom_sensitivity = !e.zoom_sensitivity,
+            Item::ZoomScroll => e.zoomify.scroll_zoom = !e.zoomify.scroll_zoom,
+            Item::ZoomRetain => e.zoomify.retain_zoom_steps = !e.zoomify.retain_zoom_steps,
+            Item::ZoomHand => e.zoomify.affect_hand_fov = !e.zoomify.affect_hand_fov,
+            Item::ZoomBobbing => {
+                e.zoomify.relative_view_bobbing = !e.zoomify.relative_view_bobbing
+            }
+            Item::ZoomInTime => {
+                e.zoomify.zoom_in_time = next(&ZOOM_TIMES, e.zoomify.zoom_in_time, back)
+            }
+            Item::ZoomOutTime => {
+                e.zoomify.zoom_out_time = next(&ZOOM_TIMES, e.zoomify.zoom_out_time, back)
+            }
+            Item::ZoomInTransition => {
+                e.zoomify.zoom_in_transition = next(
+                    &crate::zoomify::Transition::ALL,
+                    e.zoomify.zoom_in_transition,
+                    back,
+                )
+            }
+            Item::ZoomOutTransition => {
+                e.zoomify.zoom_out_transition = next(
+                    &crate::zoomify::Transition::ALL,
+                    e.zoomify.zoom_out_transition,
+                    back,
+                )
+            }
+            Item::ZoomToggle => {
+                e.zoomify.key_behaviour = next(
+                    &crate::zoomify::KeyBehaviour::ALL,
+                    e.zoomify.key_behaviour,
+                    back,
+                )
+            }
+            Item::ZoomScrollSteps => {
+                e.zoomify.scroll_step_count =
+                    next(&ZOOM_STEPS, e.zoomify.scroll_step_count, back)
+            }
+            Item::ZoomPerStep => {
+                e.zoomify.zoom_per_step = next(&ZOOM_PER_STEP, e.zoomify.zoom_per_step, back)
+            }
+            Item::ZoomScrollSmooth => {
+                e.zoomify.scroll_zoom_smoothness =
+                    next(&ZOOM_SMOOTH, e.zoomify.scroll_zoom_smoothness, back)
+            }
+            Item::ZoomSensitivity => {
+                e.zoomify.relative_sensitivity =
+                    next(&ZOOM_SENSITIVITY, e.zoomify.relative_sensitivity, back)
+            }
+            Item::ZoomSecondaryAmount => {
+                e.zoomify.secondary_zoom_amount =
+                    next(&ZOOM_SLOW_AMOUNT, e.zoomify.secondary_zoom_amount, back)
+            }
+            Item::ZoomSecondaryIn => {
+                e.zoomify.secondary_zoom_in_time =
+                    next(&ZOOM_SLOW_IN, e.zoomify.secondary_zoom_in_time, back)
+            }
+            Item::ZoomSecondaryOut => {
+                e.zoomify.secondary_zoom_out_time =
+                    next(&ZOOM_SLOW_OUT, e.zoomify.secondary_zoom_out_time, back)
+            }
             Item::Fps => e.fps = !e.fps,
             Item::FpsLows => e.fps_lows = !e.fps_lows,
             Item::Keystrokes => e.keystrokes = !e.keystrokes,
             Item::KeystrokesCps => e.keystrokes_cps = !e.keystrokes_cps,
-            Item::ZoomLevel => e.zoom_level = next(&ZOOM_LEVELS, e.zoom_level, back),
+            Item::ZoomLevel => {
+                e.zoomify.initial_zoom = next(&ZOOM_LEVELS, e.zoomify.initial_zoom, back)
+            }
             Item::FpsCorner => e.fps_corner = next(&Corner::ALL, e.fps_corner, back),
             Item::KeystrokesCorner => {
                 e.keystrokes_corner = next(&Corner::ALL, e.keystrokes_corner, back)
@@ -865,6 +1135,30 @@ impl Item {
             Item::AutoReconnect => e.auto_reconnect = !e.auto_reconnect,
             Item::MouseTweaks => e.mouse_tweaks = !e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel = !e.mouse_tweaks_wheel,
+            Item::MouseTweaksRmb => e.mouse_tweaks_rmb = !e.mouse_tweaks_rmb,
+            Item::MouseTweaksLmbItem => e.mouse_tweaks_lmb_item = !e.mouse_tweaks_lmb_item,
+            Item::MouseTweaksLmbEmpty => e.mouse_tweaks_lmb_empty = !e.mouse_tweaks_lmb_empty,
+            Item::MouseTweaksOrder => {
+                e.mouse_tweaks_order = next(
+                    &crate::mouse_tweaks::SearchOrder::ALL,
+                    e.mouse_tweaks_order,
+                    back,
+                )
+            }
+            Item::MouseTweaksDirection => {
+                e.mouse_tweaks_direction = next(
+                    &crate::mouse_tweaks::Direction::ALL,
+                    e.mouse_tweaks_direction,
+                    back,
+                )
+            }
+            Item::MouseTweaksScaling => {
+                e.mouse_tweaks_scaling = next(
+                    &crate::mouse_tweaks::Scaling::ALL,
+                    e.mouse_tweaks_scaling,
+                    back,
+                )
+            }
             Item::AppleSkin => e.appleskin = !e.appleskin,
             Item::AppleSkinRestored => e.appleskin_restored = !e.appleskin_restored,
             Item::AppleSkinSaturation => e.appleskin_saturation = !e.appleskin_saturation,
@@ -891,13 +1185,14 @@ impl Item {
             Item::MinimapZoom => e.minimap_zoom = next(&MINIMAP_ZOOMS, e.minimap_zoom, back),
             Item::NoAi => e.no_ai = !e.no_ai,
             Item::AgentControl => e.agent_control = !e.agent_control,
-            Item::ZoomKey | Item::SortKey => {}
+            Item::ZoomKey | Item::ZoomSecondaryKey | Item::SortKey => {}
         }
     }
     /// The key name the options screen waits on for a key item.
     pub fn key_name(self) -> Option<&'static str> {
         match self {
             Item::ZoomKey => Some(ZOOM_KEY),
+            Item::ZoomSecondaryKey => Some(ZOOM2_KEY),
             Item::SortKey => Some(SORT_KEY),
             _ => None,
         }
@@ -924,7 +1219,16 @@ mod tests {
         assert_eq!(Extras::parse(&e.serialize()), e);
         e.zoom = true;
         e.zoom_key = "key.keyboard.c".into();
-        e.zoom_level = 6;
+        e.zoomify.initial_zoom = 6;
+        e.zoomify.zoom_in_time = 0.25;
+        e.zoomify.zoom_out_transition = crate::zoomify::Transition::EaseInOutCubic;
+        e.zoomify.key_behaviour = crate::zoomify::KeyBehaviour::Toggle;
+        e.zoomify.scroll_step_count = 15;
+        e.zoomify.zoom_per_step = 125;
+        e.zoomify.relative_sensitivity = 50;
+        e.zoomify.affect_hand_fov = false;
+        e.zoomify.secondary_zoom_in_time = 5.0;
+        e.zoom_secondary_key = "key.keyboard.g".into();
         e.fps_corner = Corner::BottomRight;
         e.keystrokes = true;
         e.keystrokes_cps = false;
@@ -937,6 +1241,10 @@ mod tests {
         e.auto_reconnect = true;
         e.mouse_tweaks = true;
         e.mouse_tweaks_wheel = false;
+        e.mouse_tweaks_rmb = false;
+        e.mouse_tweaks_order = crate::mouse_tweaks::SearchOrder::FirstToLast;
+        e.mouse_tweaks_direction = crate::mouse_tweaks::Direction::PositionAwareInverted;
+        e.mouse_tweaks_scaling = crate::mouse_tweaks::Scaling::AlwaysOne;
         e.appleskin = true;
         e.appleskin_restored = false;
         e.appleskin_debug = false;
@@ -949,7 +1257,7 @@ mod tests {
     fn bad_lines_keep_defaults() {
         let e = Extras::parse("zoom:maybe\nzoomLevel:99\nfpsCorner:middle\nzoomKey:z\nnoise");
         assert!(!e.zoom);
-        assert_eq!(e.zoom_level, 10);
+        assert_eq!(e.zoomify.initial_zoom, 50);
         assert_eq!(e.fps_corner, Corner::TopLeft);
         assert_eq!(e.zoom_key, "key.keyboard.z");
     }
@@ -965,74 +1273,14 @@ mod tests {
     }
 
     #[test]
-    fn zoom_is_vanilla_unless_held_and_not_scoping() {
-        let mut z = Zoom::default();
-        assert_eq!(z.factor(false), 1.0);
-        assert_eq!(fov_target(1.1, z.factor(false)), 1.1);
-        assert!(!z.scroll(1.0), "the wheel is the hotbar's when not zooming");
-        z.press(4);
-        assert_eq!(z.factor(false), 4.0);
-        assert_eq!(z.factor(true), 1.0, "the spyglass wins");
-        assert!((fov_target(1.0, 4.0) - 0.25).abs() < 1e-6);
-        assert!(z.scroll(1.0));
-        assert!((z.factor(false) - 5.0).abs() < 1e-5);
-        for _ in 0..40 {
-            z.scroll(1.0);
-        }
-        assert_eq!(z.factor(false), ZOOM_MAX);
-        for _ in 0..80 {
-            z.scroll(-1.0);
-        }
-        assert_eq!(z.factor(false), ZOOM_MIN);
-        z.release();
-        assert_eq!(z.factor(false), 1.0);
-        z.press(2);
-        assert_eq!(z.factor(false), 2.0, "each press starts at the default");
-    }
-
-    #[test]
-    fn zoom_target_eases_like_the_spyglass() {
-        // Camera.tickFov halves the distance to the target each tick.
-        let mut camera = crate::camera::Camera::default();
-        camera.tick(None, 1.0);
-        for _ in 0..30 {
-            camera.tick(None, 1.0);
-        }
-        let target = fov_target(1.0, 4.0);
-        camera.tick(None, target);
-        let first = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
-        assert!((first - 70.0 * 0.625).abs() < 1e-3, "{first}");
-        for _ in 0..30 {
-            camera.tick(None, target);
-        }
-        let settled = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
-        assert!((settled - 70.0 / 4.0).abs() < 1e-3, "{settled}");
-        // Deeper than the 0.1 floor stops there, as vanilla clamps.
-        for _ in 0..30 {
-            camera.tick(None, fov_target(1.0, 20.0));
-        }
-        let floor = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
-        assert!((floor - 7.0).abs() < 1e-3, "{floor}");
-    }
-
-    #[test]
-    fn the_zoom_key_only_zooms_while_playing() {
-        let mut z = Zoom::default();
-        // In chat, a sign, a text field or any screen: no zoom.
-        z.key(true, false, false, 4);
-        assert!(!z.held());
-        z.key(true, false, true, 4);
-        assert!(z.held());
-        // A screen opening while held lets go (its key presses are the screen's).
-        z.key(true, true, false, 4);
-        assert!(!z.held());
-        // Key repeats do not restart a zoom the wheel changed.
-        z.key(true, false, true, 4);
-        z.scroll(1.0);
-        z.key(true, true, true, 4);
-        assert!((z.factor(false) - 5.0).abs() < 1e-5);
-        z.key(false, false, true, 4);
-        assert!(!z.held());
+    fn zoom_settings_from_before_zoomify_still_load() {
+        let e = Extras::parse("zoomSmooth:false\nzoomSensitivity:false\nzoomLevel:6");
+        assert_eq!(e.zoomify.initial_zoom, 6);
+        assert_eq!(e.zoomify.zoom_in_transition, crate::zoomify::Transition::Instant);
+        assert_eq!(e.zoomify.relative_sensitivity, 0);
+        let on = Extras::parse("zoomSensitivity:true");
+        assert_eq!(on.zoomify.relative_sensitivity, 100);
+        assert_eq!(Extras::parse("zoomSensitivity:40").zoomify.relative_sensitivity, 40);
     }
 
     #[test]
@@ -1055,13 +1303,6 @@ mod tests {
         e.zoom_key = "key.keyboard.unknown".into();
         keys.set("key.smoothCamera", "key.keyboard.unknown");
         assert!(zoom_key_conflicts(&e, &keys).is_empty());
-    }
-
-    #[test]
-    fn sensitivity_scales_with_zoom() {
-        assert_eq!(turn_scale(1.0, true), 1.0);
-        assert_eq!(turn_scale(4.0, false), 1.0);
-        assert_eq!(turn_scale(4.0, true), 0.25);
     }
 
     #[test]
@@ -1118,10 +1359,18 @@ mod tests {
     fn items_cycle_through_their_values() {
         let mut e = Extras::default();
         Item::ZoomLevel.cycle(&mut e, false);
-        assert_eq!(e.zoom_level, 6);
+        assert_eq!(e.zoomify.initial_zoom, 5);
         Item::ZoomLevel.cycle(&mut e, true);
         Item::ZoomLevel.cycle(&mut e, true);
-        assert_eq!(e.zoom_level, 3);
+        assert_eq!(e.zoomify.initial_zoom, 3);
+        Item::ZoomInTransition.cycle(&mut e, false);
+        assert_eq!(
+            e.zoomify.zoom_in_transition,
+            crate::zoomify::Transition::EaseInOutExp
+        );
+        assert_eq!(Item::ZoomInTime.value(&e), "1 s");
+        Item::ZoomInTime.cycle(&mut e, true);
+        assert_eq!(Item::ZoomInTime.value(&e), "0.5 s");
         Item::FpsCorner.cycle(&mut e, true);
         assert_eq!(e.fps_corner, Corner::BottomRight);
         Item::Zoom.cycle(&mut e, false);

@@ -126,6 +126,8 @@ mod model_library;
 pub mod models;
 pub mod motion;
 pub mod mouse;
+pub mod mouse_tweaks;
+pub mod zoomify;
 pub mod multiplayer;
 pub mod music;
 pub mod nbt_path;

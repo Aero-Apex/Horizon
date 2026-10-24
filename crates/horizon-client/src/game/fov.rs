@@ -54,7 +54,7 @@ impl Game<'_> {
         let target = self
             .fov_player()
             .map_or(1.0, |p| field_of_view_modifier(&p, first_person, effect));
-        let target = self.zoomed_fov_target(target);
+        self.tick_zoom();
         let eye = self.player.as_ref().map(|p| {
             if self.sleeping.is_some() {
                 0.2
@@ -92,16 +92,17 @@ impl Game<'_> {
             self.camera_fluid(camera),
             false,
         );
-        self.zoomed_fov_degrees(fov)
+        self.zoomed_fov_degrees(fov, partial)
     }
     /// `Camera.calculateHudFov`: the first-person hand's field of view.
     pub(super) fn hud_fov_degrees(&self, partial: f32, camera: [f64; 3]) -> f32 {
-        self.view.calculate_hud_fov(
+        let fov = self.view.calculate_hud_fov(
             partial,
             self.fov_effect_scale(),
             self.death_time(),
             self.camera_fluid(camera),
-        )
+        );
+        self.zoomed_hud_fov_degrees(fov, partial)
     }
     /// The pose `GameRenderer.renderLevel` multiplies into the projection:
     /// `bobHurt`, then `bobView` with the View Bobbing option.
@@ -119,7 +120,7 @@ impl Game<'_> {
             }),
             player: Some((
                 self.avatar.backwards_interpolated_walk_distance(partial),
-                self.avatar.interpolated_bob(partial),
+                self.avatar.interpolated_bob(partial) / self.zoom_bobbing_divisor(),
             )),
         };
         let tilt = self.settings.file.double("damageTiltStrength");

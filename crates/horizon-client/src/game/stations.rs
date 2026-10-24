@@ -507,7 +507,7 @@ impl Game<'_> {
             .map_or(64, |i| i.max_stack)
     }
     /// `Slot.mayPlace` and `getMaxStackSize` for station slots.
-    fn slot_rules(&self, slot: usize, stack: &ItemStack) -> (bool, u32) {
+    pub(super) fn slot_rules(&self, slot: usize, stack: &ItemStack) -> (bool, u32) {
         if slot >= super::mount_menu::SADDLE {
             return self.mount_slot_rules(slot, stack);
         }

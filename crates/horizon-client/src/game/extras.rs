@@ -4,7 +4,7 @@
 //! extra is off.
 use super::{Dim, Game, Screen};
 use horizon_client::{
-    extras::{Corner, Cps, FpsCounter, Zoom, fov_target, turn_scale},
+    extras::{Corner, Cps, FpsCounter},
     extras_hud::{self, Corners, Keystrokes},
     hud::{HudBatch, MINIMAP_SPRITE},
     keybinds,
@@ -12,13 +12,15 @@ use horizon_client::{
     multiplayer,
     reconnect::{Retry, Tracker},
     title::Mode,
+    zoomify,
 };
-use std::time::Duration;
+use std::{cell::RefCell, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 #[derive(Default)]
 pub(super) struct ExtrasState {
-    zoom: Zoom,
+    /// Zoomify's zoom. Read every frame by the camera, which takes `&self`.
+    zoom: RefCell<zoomify::State>,
     fps: FpsCounter,
     /// Left and right mouse buttons: held, and their clicks.
     mouse: [bool; 2],
@@ -40,29 +42,46 @@ impl Game<'_> {
         let e = &self.settings.extras;
         e.zoom.then(|| keybinds::key_code(&e.zoom_key)).flatten()
     }
-    /// A key press or release. The zoom key zooms only while playing with
+    fn zoom_secondary_key(&self) -> Option<KeyCode> {
+        let e = &self.settings.extras;
+        e.zoom
+            .then(|| keybinds::key_code(&e.zoom_secondary_key))
+            .flatten()
+    }
+    /// A key press or release. The zoom keys zoom only while playing with
     /// no text open; the key itself always goes on to the screen and the key
     /// binds, as a vanilla key mapping's would.
     pub(super) fn extras_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) {
-        if self.zoom_key() != Some(key) {
+        let primary = self.zoom_key() == Some(key);
+        let secondary = self.zoom_secondary_key() == Some(key);
+        if !primary && !secondary {
             return;
         }
         let playing = self.screen == Screen::Playing
             && self.title.is_none()
             && self.sign_edit.is_none()
             && self.book.is_none();
-        let level = self.settings.extras.zoom_level;
-        self.extras.zoom.key(pressed, repeat, playing, level);
+        let mut zoom = self.extras.zoom.borrow_mut();
+        if primary {
+            zoom.key(pressed, repeat, playing);
+        }
+        if secondary && pressed && !repeat {
+            zoom.secondary_key(playing);
+        }
     }
     /// Wheel steps while playing; true when zooming took them from the hotbar.
     pub(super) fn extras_scroll(&mut self, steps: f32) -> bool {
-        self.settings.extras.zoom && self.extras.zoom.scroll(steps)
+        let e = &self.settings.extras;
+        e.zoom && self.extras.zoom.borrow_mut().scroll(steps, &e.zoomify)
     }
     /// Mouse buttons while playing, for zoom and the keystroke overlay.
     pub(super) fn extras_mouse(&mut self, button: MouseButton, pressed: bool) {
         let e = &self.settings.extras;
         if e.zoom && e.zoom_key == keybinds::mouse_name(button) {
-            self.extras.zoom.key(pressed, false, true, e.zoom_level);
+            self.extras.zoom.borrow_mut().key(pressed, false, true);
+        }
+        if e.zoom && pressed && e.zoom_secondary_key == keybinds::mouse_name(button) {
+            self.extras.zoom.borrow_mut().secondary_key(true);
         }
         let i = match button {
             MouseButton::Left => 0,
@@ -80,8 +99,10 @@ impl Game<'_> {
         // Under agent control the window may lack focus without pausing.
         let focused = self.focused || self.control.is_some();
         let playing = self.screen == Screen::Playing && self.title.is_none() && focused;
-        if !playing || !self.settings.extras.zoom {
-            self.extras.zoom.release();
+        if !self.settings.extras.zoom {
+            self.extras.zoom.get_mut().clear();
+        } else if !playing {
+            self.extras.zoom.get_mut().release();
         }
         if !playing {
             self.extras.mouse = [false; 2];
@@ -209,29 +230,59 @@ impl Game<'_> {
             rgba: self.extras.minimap.image.clone(),
         });
     }
-    /// The zoom in effect (1 unless the key is held).
-    fn zoom_factor(&self) -> f32 {
-        self.extras.zoom.factor(self.scoping())
-    }
-    /// The field-of-view modifier target, divided by a smooth zoom.
-    pub(super) fn zoomed_fov_target(&self, vanilla: f32) -> f32 {
-        if self.settings.extras.zoom_smooth {
-            fov_target(vanilla, self.zoom_factor())
-        } else {
-            vanilla
+    /// One client tick of the zoom: Zoomify's `tick`.
+    pub(super) fn tick_zoom(&mut self) {
+        let e = &self.settings.extras;
+        if e.zoom {
+            self.extras.zoom.get_mut().tick(&e.zoomify);
         }
     }
-    /// The field of view in degrees, divided by an instant zoom.
-    pub(super) fn zoomed_fov_degrees(&self, fov: f32) -> f32 {
-        if self.settings.extras.zoom_smooth {
+    /// The divisor the field of view is zoomed by this frame (1 unless zooming):
+    /// `Zoomify.getZoomDivisor`.
+    fn zoom_divisor(&self, partial: f32) -> f64 {
+        let e = &self.settings.extras;
+        if !e.zoom {
+            return 1.0;
+        }
+        self.extras.zoom.borrow_mut().divisor(partial, &e.zoomify)
+    }
+    /// The field of view in degrees, zoomed.
+    pub(super) fn zoomed_fov_degrees(&self, fov: f32, partial: f32) -> f32 {
+        let divisor = self.zoom_divisor(partial);
+        if divisor == 1.0 {
             fov
         } else {
-            fov / self.zoom_factor()
+            fov / divisor as f32
         }
     }
-    /// Mouse turning while zoomed.
+    /// The hand's field of view, zoomed with the world when the setting says so.
+    pub(super) fn zoomed_hud_fov_degrees(&self, fov: f32, partial: f32) -> f32 {
+        if !self.settings.extras.zoomify.affect_hand_fov {
+            return fov;
+        }
+        let divisor = self.zoom_divisor(partial);
+        if divisor == 1.0 {
+            fov
+        } else {
+            fov / divisor as f32
+        }
+    }
+    /// Mouse turning while zoomed: the sensitivity over
+    /// `lerp(relativeSensitivity, 1, previousZoomDivisor)`.
     pub(super) fn zoom_turn_scale(&self) -> f64 {
-        turn_scale(self.zoom_factor(), self.settings.extras.zoom_sensitivity)
+        let e = &self.settings.extras;
+        if !e.zoom {
+            return 1.0;
+        }
+        1.0 / zoomify::sensitivity_divisor(self.extras.zoom.borrow().previous(), &e.zoomify)
+    }
+    /// What view bobbing is divided by while zoomed.
+    pub(super) fn zoom_bobbing_divisor(&self) -> f32 {
+        let e = &self.settings.extras;
+        if !e.zoom {
+            return 1.0;
+        }
+        zoomify::bobbing_divisor(self.extras.zoom.borrow().previous(), &e.zoomify) as f32
     }
     /// The FPS counter and keystrokes, in the HUD layer (hidden with F1 by
     /// the caller). The top left corner gives way to the debug screen.
