@@ -4534,7 +4534,27 @@ impl Game<'_> {
             Some((_, name)) => {
                 name == "inventory"
                     || name.starts_with("minecraft:generic_9x")
-                    || name == "minecraft:shulker_box"
+                    || matches!(
+                        name.as_str(),
+                        "minecraft:shulker_box"
+                            | "minecraft:furnace"
+                            | "minecraft:blast_furnace"
+                            | "minecraft:smoker"
+                            | "minecraft:brewing_stand"
+                            | "minecraft:hopper"
+                            | "minecraft:generic_3x3"
+                            | "minecraft:crafter_3x3"
+                            | "minecraft:crafting"
+                            | "minecraft:anvil"
+                            | "minecraft:smithing"
+                            | "minecraft:grindstone"
+                            | "minecraft:stonecutter"
+                            | "minecraft:loom"
+                            | "minecraft:cartography_table"
+                            | "minecraft:enchantment"
+                            | "minecraft:beacon"
+                            | "minecraft:merchant"
+                    )
             }
         }
     }

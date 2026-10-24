@@ -22,9 +22,7 @@ impl Game<'_> {
             let ConsumeEffect::ApplyEffects { effects, .. } = effect else {
                 continue;
             };
-            rotten |= effects
-                .iter()
-                .any(|e| appleskin::harmful_effect(&e.id));
+            rotten |= effects.iter().any(|e| appleskin::harmful_effect(&e.id));
             // The first Regeneration of each group.
             if let Some(e) = effects
                 .iter()

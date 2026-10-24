@@ -91,11 +91,7 @@ impl Game<'_> {
             let m = self.mobs.get(i)?;
             let id = m.kind.id.to_string();
             let egg = format!("{id}_spawn_egg");
-            let icon = self
-                .res
-                .items()
-                .get(&egg)
-                .map(|_| ItemStack::new(&egg, 1));
+            let icon = self.res.items().get(&egg).map(|_| ItemStack::new(&egg, 1));
             let title = m
                 .custom_name
                 .clone()
@@ -105,11 +101,7 @@ impl Game<'_> {
                 title,
                 owner: jade::namespace_name(&id),
                 lines: Vec::new(),
-                health: Some((
-                    m.health,
-                    horizon_client::mobs::finalize::max_health(m),
-                    0.0,
-                )),
+                health: Some((m.health, horizon_client::mobs::finalize::max_health(m), 0.0)),
                 armor: horizon_client::mobs::finalize::value(
                     m,
                     horizon_client::mobs::finalize::Attr::Armor,
@@ -187,19 +179,35 @@ impl Game<'_> {
             }
         };
         let text_w = rows.iter().map(|r| size(r).0).fold(0.0, f32::max);
-        let text_h: f32 = rows.iter().map(|r| size(r).1).sum::<f32>()
-            + LINE_GAP * (rows.len() - 1) as f32;
-        let icon_w = if t.icon.is_some() { ICON + ICON_GAP } else { 0.0 };
+        let text_h: f32 =
+            rows.iter().map(|r| size(r).1).sum::<f32>() + LINE_GAP * (rows.len() - 1) as f32;
+        let icon_w = if t.icon.is_some() {
+            ICON + ICON_GAP
+        } else {
+            0.0
+        };
         let w = PAD * 2.0 + icon_w + text_w;
         let h = PAD * 2.0 + text_h.max(ICON);
         let bosses = self.bosses.bars.bars.len() as f32;
         let x0 = ((batch.width - w) / 2.0).floor();
-        let y0 = 4.0 + if bosses > 0.0 { 10.0 + bosses * 19.0 } else { 0.0 };
+        let y0 = 4.0
+            + if bosses > 0.0 {
+                10.0 + bosses * 19.0
+            } else {
+                0.0
+            };
         // `jade:dark`: a dark box with a lighter edge, at the overlay's
         // 70% opacity.
         let alpha = (0.7_f32 * 255.0) as u8;
         batch.fill(atlas, x0, y0, w, h, rgba(46, 46, 46, alpha));
-        batch.fill(atlas, x0 + 1.0, y0 + 1.0, w - 2.0, h - 2.0, rgba(19, 19, 19, alpha));
+        batch.fill(
+            atlas,
+            x0 + 1.0,
+            y0 + 1.0,
+            w - 2.0,
+            h - 2.0,
+            rgba(19, 19, 19, alpha),
+        );
         let tx = x0 + PAD + icon_w;
         let mut ty = y0 + PAD + ((text_h.max(ICON) - text_h) / 2.0).floor();
         let mut draws: Vec<GuiDraw> = Vec::new();

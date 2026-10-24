@@ -7,8 +7,6 @@ mod agent_settings;
 mod allays;
 mod appleskin;
 mod armor_stands;
-mod jade;
-mod jei;
 mod banners;
 mod beacon;
 mod beehives;
@@ -67,6 +65,8 @@ mod initial_spawn;
 mod integrated;
 mod item_draw;
 mod item_particles;
+mod jade;
+mod jei;
 mod jukebox;
 mod lan;
 mod lan_actions;
@@ -4531,9 +4531,10 @@ impl Game<'_> {
     /// The options `MouseHandler.turnPlayer` reads.
     fn look_options(&self) -> LookOptions {
         LookOptions {
-            sensitivity: f64::from(self.settings.sensitivity),
-            smooth_camera: self.smooth_camera,
-            scoping: self.scoping(),
+            sensitivity: f64::from(self.settings.sensitivity) / self.zoom_sensitivity_divisor(),
+            smooth_camera: self.smooth_camera || self.zoom_smooths_camera(),
+            cinematic: self.zoom_cinematic_fraction(),
+            scoping: self.scoping() && self.spyglass_combines(),
             invert_x: self.settings.invert_x,
             invert_y: self.settings.invert_y,
         }
@@ -4557,8 +4558,7 @@ impl Game<'_> {
                 x_rot_o: self.pitch,
                 y_rot_o: self.yaw,
             };
-            let zoom = self.zoom_turn_scale();
-            rotation.turn(xo * zoom, yo * zoom);
+            rotation.turn(xo, yo);
             self.yaw = rotation.y_rot;
             self.pitch = rotation.x_rot;
         }
@@ -4830,7 +4830,7 @@ impl Game<'_> {
         // the sleep overlay, debug screen and open screens still draw.
         let spectator = self.spectator();
         let (wi, hi) = (w as i32, h as i32);
-        let show_hud = !self.ui.hide_gui;
+        let show_hud = !self.ui.hide_gui && !self.zoom_hides_hud();
         if show_hud {
             self.draw_spyglass(&mut batch);
             // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /

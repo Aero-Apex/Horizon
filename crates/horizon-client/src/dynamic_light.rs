@@ -1,11 +1,14 @@
-//! Horizon Extras' dynamic lights (docs/extras.md): a torch, lantern or other light source held by
-//! a player or mob, dropped as an item, or an entity on fire lights the blocks and entities
-//! around it. Not in vanilla; off by default.
+//! Horizon Extras' dynamic lights (docs/extras.md), the rules of LambDynamicLights
+//! (LambdAurora, the Lambda License, see THIRD_PARTY_NOTICES.md): a torch, lantern or other light
+//! source held or worn by a player or mob, dropped as an item, on a minecart or item frame, or an
+//! entity on fire, plus primed TNT and swelling creepers, lights the blocks and entities around it.
+//! Not in vanilla; off by default.
 //!
 //! Client-only and at render time: the light engine, chunk meshes and saves never see it. Each
 //! frame the game picks the [`MAX`] sources nearest the camera; terrain.wgsl and entity.wgsl
-//! raise a vertex's block light to `level - distance` (one level per block, as block light falls
-//! off) when that is brighter. Off, the list is empty and the shaders skip the loop.
+//! raise a vertex's block light to the source's level minus its distance (one level per block
+//! over 7.75 blocks, as LambDynamicLights falls off). Off, the list is empty and the shaders skip
+//! the loop.
 use crate::blocks::BlockFacts;
 use glam::DVec3;
 use horizon_world::registry::BlockRegistry;
@@ -21,6 +24,10 @@ const REACH: f64 = 96.0;
 /// LambDynamicLights' reach (`DynamicLightingEngine.MAX_RADIUS`): a source lights nothing past
 /// it, and its level falls by 15 over it (`SpatialLookupEntry.lightAtPos`).
 pub const RADIUS: f64 = 7.75;
+
+/// Primed TNT's fuse as it is set when lit (`PrimedTnt`'s default), which the fancy TNT light
+/// measures its burn down from.
+pub const TNT_FUSE: i32 = 80;
 
 /// LambDynamicLights' own item table (`data/lambdynlights/dynamiclights/item`), the items that
 /// do not just glow like their block: (item, level, goes dark under water). `None` takes the
@@ -111,6 +118,68 @@ impl Luminance {
     }
 }
 
+/// LambDynamicLights' lighting mode for TNT and creepers (`ExplosiveLightingMode`): off, a fixed
+/// level while it lasts, or one that follows the fuse or the swell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Explosive {
+    Off,
+    Simple,
+    Fancy,
+}
+
+impl Explosive {
+    pub const ALL: [Self; 3] = [Self::Off, Self::Simple, Self::Fancy];
+
+    /// The name the settings file writes.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Simple => "simple",
+            Self::Fancy => "fancy",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Simple => "Simple",
+            Self::Fancy => "Fancy",
+        }
+    }
+    pub fn parse(s: &str, default: Self) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|v| v.name() == s)
+            .unwrap_or(default)
+    }
+}
+
+/// The light of primed TNT with `fuse` ticks left of `start` (`ExplosiveLuminance`): fancy is
+/// off while the fuse is full and 10 when it is burnt down, as Mth's smoothstep eases it.
+pub fn tnt_level(mode: Explosive, fuse: i32, start: i32) -> u8 {
+    match mode {
+        Explosive::Off => 0,
+        Explosive::Simple => 10,
+        Explosive::Fancy => {
+            let t = fuse as f32 / start as f32;
+            let eased = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+            ((-eased * 10.0) as i32 + 10).clamp(0, 15) as u8
+        }
+    }
+}
+
+/// A creeper's light (`CreeperLuminance`): none until it swells, then 10 (simple) or its swell
+/// in tenths (fancy).
+pub fn creeper_level(mode: Explosive, swelling: f32) -> u8 {
+    if swelling <= 0.001 {
+        return 0;
+    }
+    match mode {
+        Explosive::Off => 0,
+        Explosive::Simple => 10,
+        Explosive::Fancy => (swelling * 10.0) as u8,
+    }
+}
+
 /// What the game knows of an entity for LambDynamicLights' per-type luminance
 /// (`data/lambdynlights/dynamiclights/entity`).
 #[derive(Clone, Copy, Debug, Default)]
@@ -126,9 +195,9 @@ pub struct Being {
 }
 
 /// The level LambDynamicLights gives a living entity of `kind` for what it is, not what it
-/// holds: allays 8, blazes 10 (4 wet), magma cubes 8 or 11, glow squid 12, a creeper swelling
-/// up to 9, an enderman the light of its block. 0 for the rest.
-pub fn mob_level(kind: &str, being: Being) -> u8 {
+/// holds: allays 8, blazes 10 (4 wet), magma cubes 8 or 11, glow squid 12, a creeper as `creeper`
+/// says, an enderman the light of its block. 0 for the rest.
+pub fn mob_level(kind: &str, being: Being, creeper: Explosive) -> u8 {
     match kind {
         "minecraft:allay" => 8,
         "minecraft:blaze" => {
@@ -147,13 +216,7 @@ pub fn mob_level(kind: &str, being: Being) -> u8 {
         }
         // Not hurt: its dark ticks are 0, so the full 12.
         "minecraft:glow_squid" => 12,
-        "minecraft:creeper" => {
-            if being.swelling > 0.001 {
-                (being.swelling * 10.0) as u8
-            } else {
-                0
-            }
-        }
+        "minecraft:creeper" => creeper_level(creeper, being.swelling),
         "minecraft:enderman" => being.carried,
         _ => 0,
     }
@@ -249,7 +312,10 @@ mod tests {
         let torch = [[0.0, 0.0, 0.0, 14.0]];
         assert_eq!(level_at([0.0, 0.0, 0.0], &torch), 14.0);
         let at_five = level_at([3.0, 4.0, 0.0], &torch);
-        assert!((at_five - (14.0 - 5.0 / 7.75 * 15.0)).abs() < 1e-4, "{at_five}");
+        assert!(
+            (at_five - (14.0 - 5.0 / 7.75 * 15.0)).abs() < 1e-4,
+            "{at_five}"
+        );
         assert_eq!(level_at([7.76, 0.0, 0.0], &torch), 0.0);
         // A 14 is out of light a little before the edge, a 15 just reaches it.
         assert_eq!(level_at([7.7, 0.0, 0.0], &torch), 0.0);
@@ -281,25 +347,68 @@ mod tests {
     #[test]
     fn entities_glow_by_type() {
         let dry = Being::default();
-        assert_eq!(mob_level("minecraft:allay", dry), 8);
-        assert_eq!(mob_level("minecraft:blaze", dry), 10);
-        assert_eq!(mob_level("minecraft:blaze", Being { wet: true, ..dry }), 4);
-        assert_eq!(mob_level("minecraft:magma_cube", dry), 8);
+        let fancy = Explosive::Fancy;
+        assert_eq!(mob_level("minecraft:allay", dry, fancy), 8);
+        assert_eq!(mob_level("minecraft:blaze", dry, fancy), 10);
         assert_eq!(
-            mob_level("minecraft:magma_cube", Being { squished: true, ..dry }),
+            mob_level("minecraft:blaze", Being { wet: true, ..dry }, fancy),
+            4
+        );
+        assert_eq!(mob_level("minecraft:magma_cube", dry, fancy), 8);
+        assert_eq!(
+            mob_level(
+                "minecraft:magma_cube",
+                Being {
+                    squished: true,
+                    ..dry
+                },
+                fancy
+            ),
             11
         );
-        assert_eq!(mob_level("minecraft:glow_squid", dry), 12);
-        assert_eq!(mob_level("minecraft:creeper", dry), 0);
+        assert_eq!(mob_level("minecraft:glow_squid", dry, fancy), 12);
+        assert_eq!(mob_level("minecraft:creeper", dry, fancy), 0);
         assert_eq!(
-            mob_level("minecraft:creeper", Being { swelling: 0.5, ..dry }),
+            mob_level(
+                "minecraft:creeper",
+                Being {
+                    swelling: 0.5,
+                    ..dry
+                },
+                fancy
+            ),
             5
         );
         assert_eq!(
-            mob_level("minecraft:enderman", Being { carried: 15, ..dry }),
+            mob_level("minecraft:enderman", Being { carried: 15, ..dry }, fancy),
             15
         );
-        assert_eq!(mob_level("minecraft:cow", dry), 0);
+        assert_eq!(mob_level("minecraft:cow", dry, fancy), 0);
+    }
+
+    #[test]
+    fn creepers_and_tnt_follow_their_modes() {
+        // The defaults: creepers simple (10 while swelling), TNT off.
+        let half = Being {
+            swelling: 0.5,
+            ..Being::default()
+        };
+        assert_eq!(mob_level("minecraft:creeper", half, Explosive::Simple), 10);
+        assert_eq!(mob_level("minecraft:creeper", half, Explosive::Off), 0);
+        assert_eq!(creeper_level(Explosive::Fancy, 0.0), 0);
+        assert_eq!(creeper_level(Explosive::Simple, 0.0005), 0);
+        assert_eq!(tnt_level(Explosive::Off, 40, TNT_FUSE), 0);
+        assert_eq!(tnt_level(Explosive::Simple, 40, TNT_FUSE), 10);
+        // Fancy: nothing with the fuse full, 10 when it is out, eased in between.
+        assert_eq!(tnt_level(Explosive::Fancy, TNT_FUSE, TNT_FUSE), 0);
+        assert_eq!(tnt_level(Explosive::Fancy, 0, TNT_FUSE), 10);
+        let middle = tnt_level(Explosive::Fancy, 40, TNT_FUSE);
+        assert!((4..=6).contains(&middle), "{middle}");
+        assert_eq!(Explosive::parse("fancy", Explosive::Off), Explosive::Fancy);
+        assert_eq!(
+            Explosive::parse("nope", Explosive::Simple),
+            Explosive::Simple
+        );
     }
 
     #[test]

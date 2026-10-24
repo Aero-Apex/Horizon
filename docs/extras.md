@@ -51,35 +51,41 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
 A port of LambdAurora's LambDynamicLights' rules, drawn by this client's own renderer. Not
 in vanilla.
 - **What lights**: the player and every mob, by what they hold or wear in any equipment slot (main
-  hand, off hand, head, chest, legs, feet) and by what they are; items dropped on the ground; fireballs,
-  wither skulls and arrows (spectral ones glow, burning ones give 15); falling glowing blocks; anything
-  on fire (15). A spectator gives nothing.
+  hand, off hand, head, chest, legs, feet) and by what they are; a glowing or burning mob gives 15;
+  items dropped on the ground; minecarts with a lit display block (a lit furnace cart); item frames
+  (a glow item frame 12, any frame its item's light); fireballs, wither skulls and arrows (spectral
+  ones glow, burning ones give 15); falling glowing blocks; primed TNT and swelling creepers, as their
+  own settings say; anything on fire (15). A spectator gives nothing.
+- **Creepers** (`dynamicLightsCreeper`, default simple): 10 while swelling, or its swell in tenths
+  (fancy), or off. **TNT** (`dynamicLightsTnt`, default off, as LambDynamicLights has it): 10 (simple),
+  or fancy: none while the fuse is full, growing to 10 as it burns down (the mod's smoothstep).
 - **Items**: the mod's own table first: blaze powder and rods 10, fire charges 10, glow berries 14,
   glow ink sacs 12, glowstone dust 10, nether stars 8, prismarine crystals 10, spectral arrows 8, lava
   buckets 15; torches and campfires glow like their block. Every other block item glows like its block's
   default state (`getLightEmission`): lanterns, glowstone, sea lanterns 15.
   Items that need air (torches, campfires, fire charges, lava buckets) go dark when the holder's eyes are in water.
-- **Mobs by type**: allays 8, blazes 10 (4 in water), magma cubes 8, glow squid 12, an
-  enderman the light of the block it carries, a creeper `(int)(swelling * 10)` as it swells.
+- **Mobs by type**: allays 8, blazes 10 (4 in water), magma cubes 8 or 11 when squashed past 0.6,
+  glow squid 12, an enderman the light of the block it carries.
 - **Falloff** is the engine's: `level - distance / 7.75 * 15`, and nothing past 7.75 blocks
-  (`SpatialLookupEntry.lightAtPos`). Entities light from their eyes (`getEyeY`).
+  (`SpatialLookupEntry.lightAtPos`). Entities light from their eyes.
 - Client-only, at render time: the light engine, meshes, saves and other players never see it.
   Each frame the game picks the 16 sources nearest the camera (`dynamic_light::select`);
-  terrain.wgsl and entity.wgsl raise each vertex's block light to the source's
-  level when that is brighter, then light it through the lightmap as usual. The light doesn't stop at walls.
+  terrain.wgsl and entity.wgsl raise each vertex's block light to the source's level when that is
+  brighter. The light doesn't stop at walls.
 - Under a Java shader pack the lights reach the pack's terrain too: the glue that rebuilds the lightmap
   coordinates (`gfx/java_terrain.rs`, `hz_dynamic_light`) reads the same 16 lights from its table, so the
   pack's own lighting sees them as block light. Entities take them from entity.wgsl as always.
-- Not done: magma cubes' squish (they stay at 8), glow squid dark ticks, TNT fuse
-  lighting, minecarts' blocks, item frames, display entities, the mod's data pack format and its
-  chunk-rebuild scheduler (the light is applied per vertex, so nothing is rebuilt).
+- Not done: display entities (block and item displays, which LambDynamicLights lights by their
+  block or item and brightness override): Horizon has no display entities yet. Glow squid dark ticks
+  (it stays at 12). Throwable items (eggs, pearls, potions), which glow by their item only.
+  The mod's data pack format, and its chunk rebuilds (the light is applied per vertex, so none happen).
 - Off: nothing is gathered and the shaders' loop runs zero times (the count is 0), so it costs
   nothing measurable.
 - Logic and tests: `dynamic_light.rs`; the game side `game/dynamic_lights.rs`.
 
 ### Zoom (`zoom`, default off)
-A port of isXander's Zoomify (LGPL-3.0-or-later): its `ZoomHelper`, interpolators and transition curves
-(`zoomify.rs`), with the mod's defaults.
+A port of isXander's Zoomify (LGPL-3.0-or-later): its `ZoomHelper`, interpolators, transition curves and
+spyglass rules (`zoomify.rs`), with the mod's defaults.
 - **Zoom key** (default **Z**: C is vanilla's `key.saveToolbarActivator`): hold it to zoom, or set
   "Zoom key behaviour" to Toggle. The key does nothing in chat, signs, books, text fields and every other
   screen, and is never taken from vanilla's mappings (the Extras page marks it "Also bound").
@@ -89,14 +95,22 @@ A port of isXander's Zoomify (LGPL-3.0-or-later): its `ZoomHelper`, interpolator
 - **Scroll zoom**: the wheel while zooming takes one of ten steps further in or out, each multiplying
   the zoom by 150% (the geometric `zoomPerStep`), eased by the mod's smoothness 70; scrolling out stops
   at normal field of view. Steps are forgotten when the key is let go, unless "Keep scroll steps" is on.
+- **Zoom in and out keys** (`zoomInKey`, `zoomOutKey`, unbound by default) step the zoom instead of the
+  wheel when "Zoom steps with keys" is on, as Zoomify's keybind scrolling does; the wheel then turns the hotbar.
 - The field of view is divided by the zoom (limited to 1x to 500x), the hand too ("Zoom the hand too"),
-  the mouse turns by `sensitivity / lerp(relative sensitivity, 1, zoom)`, and view bobbing is
+  the mouse turns by the sensitivity divided by `lerp(relative sensitivity, 1, zoom)`, and view bobbing is
   divided by `lerp(0.2, 1, zoom)`.
+- **Cinematic camera** (`zoomCinematic`, 0 to 100%, default 0): while zooming, the mouse is smoothed and
+  its smoothing divided by the percentage, as Zoomify does. The secondary zoom smooths the mouse too.
 - **Secondary zoom** (default key **F6**): a second, slow zoom that eases in over 10 s to 4x and out over 1 s,
-  on top of the first.
-- Zoom combines with a spyglass as the mod's default "combine" does. Not done: the cinematic camera while
-  zooming, the other spyglass behaviours and overlay and sound options, the zoom in and out
-  key mappings, hiding the HUD in the secondary zoom, the demo screen and the mod's own config file.
+  on top of the first. It hides the HUD while on, unless "Hide HUD on secondary zoom" is off.
+- **Spyglass** (`zoomSpyglass`, default combine): combined with the zoom, the spyglass zooms as vanilla
+  does and the zoom key adds to it; "Override" makes scoping zoom by the zoom instead of the spyglass's
+  own FOV and sensitivity; "Only while holding" and "Only while carrying" let the zoom key work only with
+  a spyglass in hand or in the inventory (scoping always zooms).
+- **Spyglass overlay** (`zoomOverlay`, default holding): when the scope is drawn: never, while holding or
+  carrying one, or always while zooming. **Spyglass sounds** (`zoomSpyglassSound`, default with the
+  overlay): the use and stop sounds play never, always, only with a spyglass, or with the overlay.
 - Older `horizon-extras.txt` files load: `zoomSmooth:false` becomes instant transitions and
   `zoomSensitivity:false` a relative sensitivity of 0.
 - With zoom off (or the key up and no steps), the divisor is exactly 1 and the field of view, hand,
@@ -144,8 +158,11 @@ A port of isXander's Zoomify (LGPL-3.0-or-later): its `ZoomHelper`, interpolator
 
 ### Mouse Tweaks controls (`mouseTweaks`, default off; `mouseTweaksWheel`, default on)
 A port of YaLTeR's Mouse Tweaks (BSD 3-clause): the drags (`Main.onMouseDragged`) and the wheel
-(`Main.onMouseScrolled`, planned in `mouse_tweaks.rs`). In the player inventory and chest-like containers
-(chests, barrels, ender chests, shulker boxes, hoppers, dispensers), in singleplayer and on servers:
+(`Main.onMouseScrolled`, planned in `mouse_tweaks.rs`). In the player inventory and crafting, chests and
+their kin (barrels, ender chests, shulker boxes, hoppers, dispensers, droppers), furnaces (smelting,
+blasting, smoking), brewing stands, crafters, and the station screens (anvil, smithing, grindstone,
+stonecutter, loom, cartography table, enchanting table, beacon, villager trades), in singleplayer and on
+servers (the server's menus are predicted the same way; untested on a server):
 - Right-drag holding a stack (`mouseTweaksRmb`): one item goes into each slot entered, at once
   (slots holding another item, or full, are skipped).
 - Left-drag holding a stack (`mouseTweaksLmbItem`): each slot entered that holds the same item is
@@ -153,19 +170,20 @@ A port of YaLTeR's Mouse Tweaks (BSD 3-clause): the drags (`Main.onMouseDragged`
   so a left-drag across empty slots still splits the stack as vanilla does.
 - Shift + left-drag with an empty hand (`mouseTweaksLmbEmpty`): every slot entered is quick-moved;
   holding a stack, only the slots of its item.
-- The wheel over a slot (`mouseTweaksWheel`) is the mod's: down moves items of it to the other inventory
-  (a container's to the player's inventory and the reverse, the inventory's to the crafting grid
-  in the inventory screen), up brings items of the same kind back. It works with a stack in hand
-  (put back after), moves as many items as it scrolled (or one: "Wheel items per tick"), looks for items
-  in the other inventory from its last slot (or first: "Wheel pulls from"), and can be inverted or follow
-  where the other inventory is on screen ("Wheel direction"). Over a slot the wheel is always the tweak's,
-  even when nothing moves, so the hotbar doesn't turn instead. Crafting results can't be taken this way.
+- The wheel over a slot (`mouseTweaksWheel`) is the mod's: down moves items of it to the other side (the
+  container, or the crafting grid, or a furnace's input and fuel as the menu allows), up brings items of
+  the same kind back. It works with a stack in hand (put back after), moves as many items as it scrolled
+  (or one: "Wheel items per tick"), looks for items in the other inventory from its last slot (or first:
+  "Wheel pulls from"), and can be inverted or follow where the other inventory is on screen ("Wheel
+  direction"). Over a slot the wheel is always the tweak's, even when nothing moves. Results are only
+  taken from (a crafting or smelting batch at a time), never put into, and the menu's own rules decide
+  where an item may go (`Menu::slot_rules`).
 
 Every action is ordinary slot clicks (`ContainerClick` on a server), so a
 vanilla server sees nothing unusual. With the extra off, the hooks return at
 once and the screens click exactly as vanilla's (`tools/test_menu_click_parity.py`
-and the container screen tests are unchanged). Not done: the other screens (furnace,
-crafting table, anvil and the rest), and the mod's ignore/disable annotations and API.
+and the container screen tests are unchanged). Not done: the armour and off-hand slots are not in the
+wheel's reach, the horse's inventory, and the mod's ignore and disable annotations and API.
 
 ### Sorting (`sort`, default off; `sortKey`, unbound)
 - A small button right of the container's title (chests, barrels, ender

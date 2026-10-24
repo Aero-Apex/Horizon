@@ -14,6 +14,11 @@ use horizon_core::{
 
 // AnimState slots.
 const SQUISH: usize = 0;
+
+/// `AbstractCubeMob.squish` as the render sees it at the end of the tick (the magma cube's light).
+pub fn squish(m: &Mob) -> f32 {
+    m.anim.lerp(SQUISH, 1.0)
+}
 const TARGET_SQUISH: usize = 1;
 
 pub fn register(m: &mut Mob) {

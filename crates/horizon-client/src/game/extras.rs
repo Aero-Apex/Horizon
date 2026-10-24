@@ -2,7 +2,7 @@
 //! clicks for the keystroke overlay, frame times for the FPS counter, the
 //! minimap's tiles and image, and their HUD. Each hook does nothing while its
 //! extra is off.
-use super::{Dim, Game, Screen};
+use super::{Dim, Game, Screen, shield};
 use horizon_client::{
     extras::{Corner, Cps, FpsCounter},
     extras_hud::{self, Corners, Keystrokes},
@@ -52,9 +52,15 @@ impl Game<'_> {
     /// no text open; the key itself always goes on to the screen and the key
     /// binds, as a vanilla key mapping's would.
     pub(super) fn extras_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) {
+        let e = &self.settings.extras;
+        if !e.zoom {
+            return;
+        }
+        let zoom_in = keybinds::key_code(&e.zoom_in_key) == Some(key);
+        let zoom_out = keybinds::key_code(&e.zoom_out_key) == Some(key);
         let primary = self.zoom_key() == Some(key);
         let secondary = self.zoom_secondary_key() == Some(key);
-        if !primary && !secondary {
+        if !primary && !secondary && !zoom_in && !zoom_out {
             return;
         }
         let playing = self.screen == Screen::Playing
@@ -67,6 +73,10 @@ impl Game<'_> {
         }
         if secondary && pressed && !repeat {
             zoom.secondary_key(playing);
+        }
+        // The zoom in and out keys step the zoom with keybind scrolling (Zoomify's `tick`).
+        if (zoom_in || zoom_out) && e.zoomify.keybind_scrolling && pressed && !repeat && playing {
+            zoom.step(zoom_in, &e.zoomify);
         }
     }
     /// Wheel steps while playing; true when zooming took them from the hotbar.
@@ -230,11 +240,25 @@ impl Game<'_> {
             rgba: self.extras.minimap.image.clone(),
         });
     }
-    /// One client tick of the zoom: Zoomify's `tick`.
+    /// One client tick of the zoom: Zoomify's `tick`, with the spyglass rules and the sounds
+    /// they make.
     pub(super) fn tick_zoom(&mut self) {
-        let e = &self.settings.extras;
-        if e.zoom {
-            self.extras.zoom.get_mut().tick(&e.zoomify);
+        if !self.settings.extras.zoom {
+            return;
+        }
+        let hands = self.zoom_hands();
+        let sounds = self
+            .extras
+            .zoom
+            .borrow_mut()
+            .tick(&self.settings.extras.zoomify, hands);
+        let at = self.eye_position();
+        if sounds.start {
+            self.audio.play("minecraft:item.spyglass.use", at, 1.0, 1.0);
+        }
+        if sounds.stop {
+            self.audio
+                .play("minecraft:item.spyglass.stop_using", at, 1.0, 1.0);
         }
     }
     /// The divisor the field of view is zoomed by this frame (1 unless zooming):
@@ -267,14 +291,70 @@ impl Game<'_> {
             fov / divisor as f32
         }
     }
-    /// Mouse turning while zoomed: the sensitivity over
-    /// `lerp(relativeSensitivity, 1, previousZoomDivisor)`.
-    pub(super) fn zoom_turn_scale(&self) -> f64 {
+    /// Mouse turning while zoomed: the sensitivity is divided by
+    /// `lerp(relativeSensitivity, 1, previousZoomDivisor)` (`applyRelativeSensitivity`).
+    pub(super) fn zoom_sensitivity_divisor(&self) -> f64 {
         let e = &self.settings.extras;
         if !e.zoom {
             return 1.0;
         }
-        1.0 / zoomify::sensitivity_divisor(self.extras.zoom.borrow().previous(), &e.zoomify)
+        zoomify::sensitivity_divisor(self.extras.zoom.borrow().previous(), &e.zoomify)
+    }
+    /// The mouse is smoothed by the zoom (`smoothCameraIfZoom`).
+    pub(super) fn zoom_smooths_camera(&self) -> bool {
+        let e = &self.settings.extras;
+        e.zoom && self.extras.zoom.borrow().smooths_camera(&e.zoomify)
+    }
+    /// What the mouse's smoothing is divided by (`modifyCinematicSmoothness`): 1 unless the
+    /// cinematic camera is on while zooming.
+    pub(super) fn zoom_cinematic_fraction(&self) -> f64 {
+        let e = &self.settings.extras;
+        if !e.zoom {
+            return 1.0;
+        }
+        self.extras.zoom.borrow().cinematic_fraction(&e.zoomify)
+    }
+    /// The HUD is hidden by the secondary zoom (Zoomify's secondary `HudMixin`).
+    pub(super) fn zoom_hides_hud(&self) -> bool {
+        let e = &self.settings.extras;
+        e.zoom && self.extras.zoom.borrow().hides_hud(&e.zoomify)
+    }
+    /// The spyglass combines with the zoom, as vanilla has it: its FOV, sensitivity and overlay
+    /// stay vanilla's unless the spyglass behaviour says otherwise.
+    pub(super) fn spyglass_combines(&self) -> bool {
+        let e = &self.settings.extras;
+        !e.zoom || e.zoomify.spyglass == zoomify::Spyglass::Combine
+    }
+    /// What the zoom reads of the player this tick (`Zoomify.handleSpyglass`).
+    pub(super) fn zoom_hands(&self) -> zoomify::Hands {
+        let spyglass = |slot: usize| {
+            self.stack_in(slot)
+                .is_some_and(|s| &*s.item == "minecraft:spyglass")
+        };
+        zoomify::Hands {
+            scoping: self.scoping(),
+            first_person: self.camera_type.first_person(),
+            holding: spyglass(self.selected) || spyglass(shield::OFFHAND_SLOT),
+            carrying: (0..=shield::OFFHAND_SLOT).any(spyglass),
+        }
+    }
+    /// Whether the spyglass's scope is drawn (`Zoomify.shouldRenderOverlay`); vanilla's own
+    /// rule while the zoom is off.
+    pub(super) fn zoom_overlay_visible(&self) -> bool {
+        let e = &self.settings.extras;
+        let hands = self.zoom_hands();
+        if !e.zoom {
+            return hands.scoping;
+        }
+        self.extras
+            .zoom
+            .borrow()
+            .overlay(&e.zoomify, hands, hands.scoping)
+    }
+    /// Whether vanilla's spyglass use and stop sounds play (`SpyglassItemMixin`).
+    pub(super) fn spyglass_sound_allowed(&self) -> bool {
+        let e = &self.settings.extras;
+        !e.zoom || self.extras.zoom.borrow().vanilla_sound(&e.zoomify)
     }
     /// What view bobbing is divided by while zoomed.
     pub(super) fn zoom_bobbing_divisor(&self) -> f32 {

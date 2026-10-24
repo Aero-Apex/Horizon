@@ -1245,7 +1245,7 @@ impl Game<'_> {
             }
         }
     }
-    fn display_state(&self, c: &Minecart) -> Option<BlockStateId> {
+    pub(super) fn display_state(&self, c: &Minecart) -> Option<BlockStateId> {
         let registry = &self.pack.assets.registry;
         let with = |name: &str, props: &[(&str, &str)]| {
             let mut s = registry.state(registry.default_state(name)?)?.clone();

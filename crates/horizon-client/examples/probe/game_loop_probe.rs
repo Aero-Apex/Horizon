@@ -185,6 +185,7 @@ fn mouse(c: &Value, out: &mut impl Write) -> Result<()> {
     let look = LookOptions {
         sensitivity: db(&c["sens"]),
         smooth_camera: b(&c["smooth"]),
+        cinematic: 1.0,
         scoping: b(&c["scoping"]),
         invert_x: b(&c["ix"]),
         invert_y: b(&c["iy"]),

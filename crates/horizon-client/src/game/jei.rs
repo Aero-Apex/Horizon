@@ -92,13 +92,32 @@ fn slot_box(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, x: f32,
     batch.fill(atlas, x, y, SLOT, SLOT, rgba(139, 139, 139, 255));
     batch.fill(atlas, x, y, SLOT - 1.0, 1.0, rgba(55, 55, 55, 255));
     batch.fill(atlas, x, y, 1.0, SLOT - 1.0, rgba(55, 55, 55, 255));
-    batch.fill(atlas, x + 1.0, y + SLOT - 1.0, SLOT - 1.0, 1.0, rgba(255, 255, 255, 255));
-    batch.fill(atlas, x + SLOT - 1.0, y + 1.0, 1.0, SLOT - 1.0, rgba(255, 255, 255, 255));
+    batch.fill(
+        atlas,
+        x + 1.0,
+        y + SLOT - 1.0,
+        SLOT - 1.0,
+        1.0,
+        rgba(255, 255, 255, 255),
+    );
+    batch.fill(
+        atlas,
+        x + SLOT - 1.0,
+        y + 1.0,
+        1.0,
+        SLOT - 1.0,
+        rgba(255, 255, 255, 255),
+    );
 }
 
 /// A button as the game's own: black rim, light edge top left, dark bottom
 /// right, bluish when the pointer is on it.
-fn button_box(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, r: [f32; 4], hover: bool) {
+fn button_box(
+    batch: &mut HudBatch,
+    atlas: &horizon_client::hud::HudAtlas,
+    r: [f32; 4],
+    hover: bool,
+) {
     let fill = if hover {
         rgba(125, 134, 188, 255)
     } else {
@@ -106,10 +125,38 @@ fn button_box(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, r: [f
     };
     batch.fill(atlas, r[0], r[1], r[2], r[3], rgba(0, 0, 0, 255));
     batch.fill(atlas, r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0, fill);
-    batch.fill(atlas, r[0] + 1.0, r[1] + 1.0, r[2] - 3.0, 1.0, rgba(190, 190, 200, 255));
-    batch.fill(atlas, r[0] + 1.0, r[1] + 1.0, 1.0, r[3] - 3.0, rgba(190, 190, 200, 255));
-    batch.fill(atlas, r[0] + 2.0, r[1] + r[3] - 2.0, r[2] - 3.0, 1.0, rgba(60, 60, 66, 255));
-    batch.fill(atlas, r[0] + r[2] - 2.0, r[1] + 2.0, 1.0, r[3] - 3.0, rgba(60, 60, 66, 255));
+    batch.fill(
+        atlas,
+        r[0] + 1.0,
+        r[1] + 1.0,
+        r[2] - 3.0,
+        1.0,
+        rgba(190, 190, 200, 255),
+    );
+    batch.fill(
+        atlas,
+        r[0] + 1.0,
+        r[1] + 1.0,
+        1.0,
+        r[3] - 3.0,
+        rgba(190, 190, 200, 255),
+    );
+    batch.fill(
+        atlas,
+        r[0] + 2.0,
+        r[1] + r[3] - 2.0,
+        r[2] - 3.0,
+        1.0,
+        rgba(60, 60, 66, 255),
+    );
+    batch.fill(
+        atlas,
+        r[0] + r[2] - 2.0,
+        r[1] + 2.0,
+        1.0,
+        r[3] - 3.0,
+        rgba(60, 60, 66, 255),
+    );
 }
 
 /// A small square button with a symbol in it. `<` and `>` are drawn as
@@ -127,7 +174,11 @@ fn button(
         let (cx, cy) = (r[0] + (r[2] / 2.0).floor(), r[1] + (r[3] / 2.0).floor());
         for j in 0..4 {
             let tall = (1 + 2 * j) as f32;
-            let x = if label == "<" { cx - 2.0 + j as f32 } else { cx + 1.0 - j as f32 };
+            let x = if label == "<" {
+                cx - 2.0 + j as f32
+            } else {
+                cx + 1.0 - j as f32
+            };
             batch.fill(atlas, x, cy - (tall / 2.0).floor(), 1.0, tall, white);
         }
         return;
@@ -146,12 +197,29 @@ fn button(
 /// A wrench, 12 by 12, in a button.
 fn wrench(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, r: [f32; 4], hover: bool) {
     button_box(batch, atlas, r, hover);
-    let (x, y) = (r[0] + ((r[2] - 12.0) / 2.0).floor(), r[1] + ((r[3] - 12.0) / 2.0).floor());
+    let (x, y) = (
+        r[0] + ((r[2] - 12.0) / 2.0).floor(),
+        r[1] + ((r[3] - 12.0) / 2.0).floor(),
+    );
     let light = rgba(220, 220, 225, 255);
     let shade = rgba(60, 60, 66, 255);
     for i in 0..7 {
-        batch.fill(atlas, x + 1.0 + i as f32 + 1.0, y + 10.0 - i as f32 + 1.0, 2.0, 2.0, shade);
-        batch.fill(atlas, x + 1.0 + i as f32, y + 10.0 - i as f32, 2.0, 2.0, light);
+        batch.fill(
+            atlas,
+            x + 1.0 + i as f32 + 1.0,
+            y + 10.0 - i as f32 + 1.0,
+            2.0,
+            2.0,
+            shade,
+        );
+        batch.fill(
+            atlas,
+            x + 1.0 + i as f32,
+            y + 10.0 - i as f32,
+            2.0,
+            2.0,
+            light,
+        );
     }
     batch.fill(atlas, x + 7.0, y + 1.0, 5.0, 5.0, light);
     batch.fill(atlas, x + 9.0, y + 1.0, 3.0, 3.0, rgba(111, 111, 111, 255));
@@ -160,7 +228,14 @@ fn wrench(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, r: [f32; 
 /// A grey strip with a centred title, as the window's header rows.
 fn strip(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, r: [f32; 4], title: &str) {
     batch.fill(atlas, r[0], r[1], r[2], r[3], rgba(55, 55, 55, 255));
-    batch.fill(atlas, r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0, rgba(139, 139, 139, 255));
+    batch.fill(
+        atlas,
+        r[0] + 1.0,
+        r[1] + 1.0,
+        r[2] - 2.0,
+        r[3] - 2.0,
+        rgba(139, 139, 139, 255),
+    );
     let tw = HudBatch::text_width(atlas, title);
     batch.text(
         atlas,
@@ -173,12 +248,33 @@ fn strip(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, r: [f32; 4
 }
 
 /// A rectangle in the window's grey: white top left, dark bottom right.
-fn raised(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, x: f32, y: f32, w: f32, h: f32) {
+fn raised(
+    batch: &mut HudBatch,
+    atlas: &horizon_client::hud::HudAtlas,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) {
     batch.fill(atlas, x, y, w, h, rgba(198, 198, 198, 255));
     batch.fill(atlas, x, y, w - 1.0, 1.0, rgba(255, 255, 255, 255));
     batch.fill(atlas, x, y, 1.0, h - 1.0, rgba(255, 255, 255, 255));
-    batch.fill(atlas, x + 1.0, y + h - 1.0, w - 1.0, 1.0, rgba(85, 85, 85, 255));
-    batch.fill(atlas, x + w - 1.0, y + 1.0, 1.0, h - 1.0, rgba(85, 85, 85, 255));
+    batch.fill(
+        atlas,
+        x + 1.0,
+        y + h - 1.0,
+        w - 1.0,
+        1.0,
+        rgba(85, 85, 85, 255),
+    );
+    batch.fill(
+        atlas,
+        x + w - 1.0,
+        y + 1.0,
+        1.0,
+        h - 1.0,
+        rgba(85, 85, 85, 255),
+    );
 }
 
 /// The arrow between a recipe's inputs and its output, 24 wide and 16 tall.
@@ -187,7 +283,14 @@ fn arrow(batch: &mut HudBatch, atlas: &horizon_client::hud::HudAtlas, x: f32, y:
     batch.fill(atlas, x, y + 6.0, 16.0, 4.0, grey);
     for i in 0..8 {
         let half = (8 - i) as f32;
-        batch.fill(atlas, x + 16.0 + i as f32, y + 8.0 - half, 1.0, half * 2.0, grey);
+        batch.fill(
+            atlas,
+            x + 16.0 + i as f32,
+            y + 8.0 - half,
+            1.0,
+            half * 2.0,
+            grey,
+        );
     }
 }
 
@@ -236,10 +339,7 @@ impl Game<'_> {
             return (0..stacks.len()).collect();
         }
         let tooltip = logic::needs_tooltip(&query);
-        let wants_tags = query
-            .iter()
-            .flatten()
-            .any(|p| p.field == logic::Field::Tag);
+        let wants_tags = query.iter().flatten().any(|p| p.field == logic::Field::Tag);
         // Tag -> items, turned round, when a term asks for tags.
         let mut tags: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
         if wants_tags {
@@ -262,8 +362,10 @@ impl Game<'_> {
                             .into_iter()
                             .map(|(line, _)| line)
                             .collect::<Vec<_>>()
-                            .join("
-")
+                            .join(
+                                "
+",
+                            )
                     } else {
                         String::new()
                     },
@@ -517,7 +619,10 @@ impl Game<'_> {
     /// The `+` of a recipe: in creative, puts its ingredients in the inventory.
     fn jei_give(&mut self, index: usize) {
         if !self.creative {
-            self.message = Some(("Adding ingredients needs creative mode".into(), Instant::now()));
+            self.message = Some((
+                "Adding ingredients needs creative mode".into(),
+                Instant::now(),
+            ));
             return;
         }
         let Some((_, items)) = self.jei.plus.get(index).cloned() else {
@@ -593,7 +698,9 @@ impl Game<'_> {
                 );
             }
             self.draw_item(batch, stack, x + 1.0, y + 1.0);
-            self.jei.hits.push((x + 1.0, y + 1.0, stack.item.to_string()));
+            self.jei
+                .hits
+                .push((x + 1.0, y + 1.0, stack.item.to_string()));
         }
 
         // The page row and the search box with its wrench.
@@ -673,21 +780,56 @@ impl Game<'_> {
         {
             let atlas = &self.gui.atlas;
             // The panel: black rim, light grey, white top left, dark bottom right.
-            batch.fill(atlas, x - 1.0, y - 1.0, w + 2.0, h + 2.0, rgba(0, 0, 0, 255));
+            batch.fill(
+                atlas,
+                x - 1.0,
+                y - 1.0,
+                w + 2.0,
+                h + 2.0,
+                rgba(0, 0, 0, 255),
+            );
             raised(batch, atlas, x, y, w, h);
             // Tabs: the chosen one is part of the window, the others sit lower.
             for i in 0..view.groups.len() {
                 let tx = x + 4.0 + i as f32 * TAB_STEP;
                 self.jei.tabs.push([tx, y - TAB_HEIGHT, 22.0, TAB_HEIGHT]);
                 if i == selected {
-                    batch.fill(atlas, tx - 1.0, y - TAB_HEIGHT - 1.0, 24.0, TAB_HEIGHT + 1.0, rgba(0, 0, 0, 255));
+                    batch.fill(
+                        atlas,
+                        tx - 1.0,
+                        y - TAB_HEIGHT - 1.0,
+                        24.0,
+                        TAB_HEIGHT + 1.0,
+                        rgba(0, 0, 0, 255),
+                    );
                     raised(batch, atlas, tx, y - TAB_HEIGHT, 22.0, TAB_HEIGHT + 1.0);
                 } else {
                     let top = y - TAB_HEIGHT + 3.0;
-                    batch.fill(atlas, tx - 1.0, top - 1.0, 24.0, TAB_HEIGHT - 2.0, rgba(0, 0, 0, 255));
-                    batch.fill(atlas, tx, top, 22.0, TAB_HEIGHT - 3.0, rgba(139, 139, 139, 255));
+                    batch.fill(
+                        atlas,
+                        tx - 1.0,
+                        top - 1.0,
+                        24.0,
+                        TAB_HEIGHT - 2.0,
+                        rgba(0, 0, 0, 255),
+                    );
+                    batch.fill(
+                        atlas,
+                        tx,
+                        top,
+                        22.0,
+                        TAB_HEIGHT - 3.0,
+                        rgba(139, 139, 139, 255),
+                    );
                     batch.fill(atlas, tx, top, 21.0, 1.0, rgba(200, 200, 200, 255));
-                    batch.fill(atlas, tx, top, 1.0, TAB_HEIGHT - 4.0, rgba(200, 200, 200, 255));
+                    batch.fill(
+                        atlas,
+                        tx,
+                        top,
+                        1.0,
+                        TAB_HEIGHT - 4.0,
+                        rgba(200, 200, 200, 255),
+                    );
                 }
             }
             // The title row (previous and next category) and the page row.
@@ -730,9 +872,30 @@ impl Game<'_> {
             {
                 let atlas = &self.gui.atlas;
                 batch.fill(atlas, fx, fy, fw, fh, rgba(139, 139, 139, 255));
-                batch.fill(atlas, fx + 1.0, fy + 1.0, fw - 2.0, fh - 2.0, rgba(212, 212, 212, 255));
-                batch.fill(atlas, fx + 1.0, fy + fh - 2.0, fw - 2.0, 1.0, rgba(255, 255, 255, 255));
-                batch.fill(atlas, fx + fw - 2.0, fy + 1.0, 1.0, fh - 2.0, rgba(255, 255, 255, 255));
+                batch.fill(
+                    atlas,
+                    fx + 1.0,
+                    fy + 1.0,
+                    fw - 2.0,
+                    fh - 2.0,
+                    rgba(212, 212, 212, 255),
+                );
+                batch.fill(
+                    atlas,
+                    fx + 1.0,
+                    fy + fh - 2.0,
+                    fw - 2.0,
+                    1.0,
+                    rgba(255, 255, 255, 255),
+                );
+                batch.fill(
+                    atlas,
+                    fx + fw - 2.0,
+                    fy + 1.0,
+                    1.0,
+                    fh - 2.0,
+                    rgba(255, 255, 255, 255),
+                );
                 for &(dx, dy, _) in &layout.inputs {
                     slot_box(batch, atlas, ox + dx, oy + dy);
                 }

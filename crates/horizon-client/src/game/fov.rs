@@ -33,7 +33,7 @@ impl Game<'_> {
             let stack = self.stack_in(slot)?;
             let item = match &*stack.item {
                 "minecraft:bow" => UseItem::Bow,
-                "minecraft:spyglass" => UseItem::Spyglass,
+                "minecraft:spyglass" if self.spyglass_combines() => UseItem::Spyglass,
                 _ => UseItem::Other,
             };
             Some((item, ticks as i32))
@@ -155,11 +155,16 @@ impl Game<'_> {
         if self.using.is_none() {
             self.using = Some((self.held_slot(), 0));
             let at = self.eye_position();
-            self.audio.play("minecraft:item.spyglass.use", at, 1.0, 1.0);
+            if self.spyglass_sound_allowed() {
+                self.audio.play("minecraft:item.spyglass.use", at, 1.0, 1.0);
+            }
         }
     }
     /// `SpyglassItem.releaseUsing` / `finishUsingItem` (after 1200 ticks).
     pub(super) fn stop_spyglass(&mut self) {
+        if !self.spyglass_sound_allowed() {
+            return;
+        }
         let at = self.eye_position();
         self.audio
             .play("minecraft:item.spyglass.stop_using", at, 1.0, 1.0);
@@ -172,7 +177,7 @@ impl Game<'_> {
         if !self.camera_type.first_person() {
             return;
         }
-        if !self.scoping() {
+        if !self.zoom_overlay_visible() {
             self.scope_scale = 0.5;
             return;
         }

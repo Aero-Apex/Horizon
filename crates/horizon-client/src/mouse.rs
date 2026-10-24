@@ -135,6 +135,9 @@ pub fn mth_clamp(value: f32, min: f32, max: f32) -> f32 {
 pub struct LookOptions {
     pub sensitivity: f64,
     pub smooth_camera: bool,
+    /// The cinematic camera's fraction (`modifyCinematicSmoothness`): the smoothing is divided
+    /// by it; 1 when off.
+    pub cinematic: f64,
     /// First-person camera and the player is scoping (spyglass).
     pub scoping: bool,
     pub invert_x: bool,
@@ -242,10 +245,14 @@ impl MouseLook {
         let (sensitivity_mod, sens) = sensitivity_scales(look.sensitivity);
         let (xo, yo) = if look.smooth_camera {
             (
-                self.smooth_turn_x
-                    .get_new_delta_value(self.accumulated_dx * sens, mousea * sens),
-                self.smooth_turn_y
-                    .get_new_delta_value(self.accumulated_dy * sens, mousea * sens),
+                self.smooth_turn_x.get_new_delta_value(
+                    self.accumulated_dx * sens,
+                    mousea * sens / look.cinematic,
+                ),
+                self.smooth_turn_y.get_new_delta_value(
+                    self.accumulated_dy * sens,
+                    mousea * sens / look.cinematic,
+                ),
             )
         } else if look.scoping {
             self.smooth_turn_x.reset();
@@ -331,6 +338,7 @@ mod tests {
     const PLAIN: LookOptions = LookOptions {
         sensitivity: 0.5,
         smooth_camera: false,
+        cinematic: 1.0,
         scoping: false,
         invert_x: false,
         invert_y: false,
@@ -428,6 +436,7 @@ mod tests {
         // without new motion carry on towards the same total.
         let o = LookOptions {
             smooth_camera: true,
+            cinematic: 1.0,
             ..PLAIN
         };
         let (dx, _) = motion_for_turn(30.0, 0.0, o);
@@ -464,6 +473,7 @@ mod tests {
                 LookOptions {
                     sensitivity: 0.5,
                     smooth_camera: false,
+                    cinematic: 1.0,
                     scoping: false,
                     invert_x: false,
                     invert_y: false,

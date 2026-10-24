@@ -18,7 +18,7 @@
 //! Sorting draws a small button by the container's title and one by the
 //! inventory's (an optional key sorts the part under the cursor); the
 //! clicks come from `inv_sort::plan`.
-use super::{Creative, Game, Screen};
+use super::{Creative, Game, Screen, stations::Kind};
 use horizon_client::{
     containers::BlockEntity,
     hud::{HudBatch, rgba},
@@ -29,6 +29,7 @@ use horizon_client::{
     mouse_tweaks,
     stations::hover_name,
 };
+use std::{collections::HashMap, sync::Arc};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// A sort button's side in GUI pixels.
@@ -53,19 +54,50 @@ struct Drag {
 }
 
 impl Game<'_> {
-    /// The open screen is one the tweaks run in, with the extra on.
+    /// The open screen is one the tweaks run in, with the extra on: the player's inventory and
+    /// crafting, the chests and their kin, furnaces, brewing stands, crafters, and the station
+    /// screens the menu engine models. Not the horse's inventory.
     pub(super) fn tweaks_on(&self) -> bool {
         if !self.settings.extras.mouse_tweaks
             || self.screen != Screen::Inventory
-            || self.station.is_some()
             || self.mount_active()
         {
             return false;
         }
         if self.remote.is_some() {
-            self.remote_storage_open()
-        } else {
-            matches!(self.container_kind(), None | Some(BlockEntity::Chest(_)))
+            return self.remote_storage_open();
+        }
+        match self.station.as_ref().map(|s| s.kind) {
+            Some(kind) => matches!(
+                kind,
+                Kind::Merchant
+                    | Kind::Loom
+                    | Kind::Stonecutter
+                    | Kind::Grindstone
+                    | Kind::Cartography
+                    | Kind::Anvil
+                    | Kind::Smithing
+                    | Kind::Enchanting
+                    | Kind::Beacon
+            ),
+            None => matches!(
+                self.container_kind(),
+                None | Some(
+                    BlockEntity::Chest(_)
+                        | BlockEntity::Furnace(_)
+                        | BlockEntity::Brewing(_)
+                        | BlockEntity::Crafter(_)
+                )
+            ),
+        }
+    }
+    /// The result slots (`ResultSlot`, `FurnaceResultSlot`, `MerchantResultSlot`): items come
+    /// out of them, never in.
+    fn tweak_output(&self, slot: usize) -> bool {
+        match slot {
+            200 => true,
+            302 => matches!(self.container_kind(), Some(BlockEntity::Furnace(_))),
+            _ => self.station.is_some() && slot == super::stations::RESULT,
         }
     }
     /// One ordinary click on a game slot. False when nothing took it.
@@ -87,7 +119,9 @@ impl Game<'_> {
     /// placing), else vanilla's press runs and the tweaks watch the drag.
     pub(super) fn tweak_press(&mut self, slot: Option<usize>, right: bool, shift: bool) -> bool {
         self.tweaks.drag = None;
-        let Some(slot) = slot.filter(|&s| s != 200 && s < Creative::DISPLAY) else {
+        let Some(slot) =
+            slot.filter(|&s| s != 200 && s < Creative::DISPLAY && !self.tweak_output(s))
+        else {
             return false;
         };
         if !self.tweaks_on() {
@@ -122,21 +156,65 @@ impl Game<'_> {
         }
         false
     }
-    /// Places one held item in `slot` when it takes it.
+    /// Places one held item in `slot` when the menu takes it.
     fn tweak_place(&mut self, drag: &mut Drag, slot: usize) {
         let Some(held) = drag.held.clone() else {
             return;
         };
-        let accepts = match self.slot_view(slot) {
-            None => true,
-            Some(s) => s.same_item_same_components(&held) && s.count < self.max_stack(&s),
-        };
+        let (may, max) = self.tweak_slot_rule(slot, &held);
+        let accepts = may
+            && match self.slot_view(slot) {
+                None => true,
+                Some(s) => s.same_item_same_components(&held) && s.count < max,
+            };
         if accepts && self.tweak_click(slot, 1, Input::Pickup) {
-            drag.held = (held.count > 1).then(|| ItemStack {
-                count: held.count - 1,
-                ..held
-            });
+            drag.held = self.carried.clone();
         }
+    }
+    /// The menu engine's `Slot.mayPlace` and largest stack for `stack` in `slot`.
+    fn tweak_slot_rule(&mut self, slot: usize, stack: &ItemStack) -> (bool, u32) {
+        let mut rule = (true, 64);
+        self.menu_session(|menu, env, to_menu| {
+            if let Some(i) = to_menu(slot) {
+                rule = menu.slot_rules(env, i, stack);
+            }
+            Some(false)
+        });
+        rule
+    }
+    /// The menu engine's rules per slot and item, for the wheel's plan: what its clicks accept.
+    fn tweak_rules(
+        &mut self,
+        slots: &[mouse_tweaks::Slot],
+        carried: Option<&ItemStack>,
+    ) -> HashMap<(usize, Arc<str>), (bool, u32)> {
+        let mut items: Vec<Arc<str>> = slots
+            .iter()
+            .filter_map(|s| s.stack.as_ref().map(|i| i.item.clone()))
+            .collect();
+        items.extend(carried.map(|c| c.item.clone()));
+        items.sort();
+        items.dedup();
+        let ids: Vec<usize> = slots.iter().map(|s| s.id).collect();
+        let mut table = HashMap::new();
+        self.menu_session(|menu, env, to_menu| {
+            for &id in &ids {
+                let Some(i) = to_menu(id) else {
+                    continue;
+                };
+                for item in &items {
+                    let stack = ItemStack {
+                        item: item.clone(),
+                        count: 1,
+                        damage: 0,
+                        extra: None,
+                    };
+                    table.insert((id, item.clone()), menu.slot_rules(env, i, &stack));
+                }
+            }
+            Some(false)
+        });
+        table
     }
     /// The cursor moved while a button is held: true when the tweaks own
     /// the drag (vanilla's quick craft drag doesn't grow).
@@ -145,8 +223,12 @@ impl Game<'_> {
             return false;
         };
         let active = drag.active;
-        let entered =
-            slot.filter(|s| *s != 200 && *s < Creative::DISPLAY && !drag.visited.contains(s));
+        let entered = slot.filter(|s| {
+            *s != 200
+                && *s < Creative::DISPLAY
+                && !self.tweak_output(*s)
+                && !drag.visited.contains(s)
+        });
         if let Some(slot) = entered {
             drag.visited.push(slot);
             let stack = self.slot_view(slot);
@@ -172,10 +254,7 @@ impl Game<'_> {
                         && self.tweak_click(slot, 0, Input::Pickup)
                     {
                         // Put the hand's stack in the slot, then take it all.
-                        drag.held = Some(ItemStack {
-                            count: held.count + s.count,
-                            ..held
-                        });
+                        drag.held = self.carried.clone();
                     }
                 }
             } else if shift && stack.is_some() {
@@ -191,24 +270,29 @@ impl Game<'_> {
     pub(super) fn tweak_release(&mut self) {
         self.tweaks.drag = None;
     }
-    /// The slots the wheel works on, in the menu's order: the player's inventory (the main
-    /// inventory and hotbar), and the crafting grid or container across from it. Results,
-    /// armour and the off hand are left out: their clicks are not plain pick-ups here.
+    /// The slots the wheel works on, in the menu's order: the inventory, the crafting grid or
+    /// container across from it, the results and a station's slots. The armour, off hand and the
+    /// crafter's display slot are left out.
     fn wheel_slots(&mut self) -> Vec<mouse_tweaks::Slot> {
         let ids: Vec<usize> = self
             .slots()
             .into_iter()
-            .filter(|&s| s != 200 && s < 500 && s != 309)
+            .filter(|&s| s != 309 && (s < 500 || s == 200 || (600..700).contains(&s)))
             .collect();
-        ids.into_iter()
-            .map(|id| mouse_tweaks::Slot {
+        let mut slots = Vec::with_capacity(ids.len());
+        for id in ids {
+            let y = self.slot_position(id).1;
+            let output = self.tweak_output(id);
+            let stack = self.slot_view(id);
+            slots.push(mouse_tweaks::Slot {
                 id,
                 own: id < 36,
-                y: self.slot_position(id).1,
-                output: false,
-                stack: self.slot_view(id),
-            })
-            .collect()
+                y,
+                output,
+                stack,
+            });
+        }
+        slots
     }
     /// The wheel over an inventory screen: true when the tweaks used it. Over any slot of the
     /// menu it is always theirs, even when nothing moves, so the hotbar doesn't turn instead.
@@ -233,11 +317,18 @@ impl Game<'_> {
         if steps == 0 {
             return true;
         }
+        let carried = self.carried.clone();
+        let table = self.tweak_rules(&slots, carried.as_ref());
         let item_max = |s: &ItemStack| self.max_stack(s);
-        let rules = |id: usize, s: &ItemStack| self.slot_rules(id, s);
+        let rules = |id: usize, s: &ItemStack| {
+            table
+                .get(&(id, s.item.clone()))
+                .copied()
+                .unwrap_or((true, 64))
+        };
         let mut menu = mouse_tweaks::Menu {
             slots,
-            carried: self.carried.clone(),
+            carried,
             item_max: &item_max,
             rules: &rules,
             clicks: Vec::new(),

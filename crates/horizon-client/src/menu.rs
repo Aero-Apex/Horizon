@@ -1217,6 +1217,12 @@ impl Menu {
 
     // ---- Slot ----
 
+    /// `Slot.mayPlace` and `Slot.getMaxStackSize` of slot `i` for `stack`, as the clicks decide
+    /// them: what a wheel or a drag plans with.
+    pub fn slot_rules(&self, env: &Env, i: usize, stack: &ItemStack) -> (bool, u32) {
+        (self.may_place(env, i, stack), self.slot_max(env, i, stack))
+    }
+
     fn may_place(&self, env: &Env, s: usize, stack: &ItemStack) -> bool {
         match self.slots[s].role {
             Role::Plain | Role::CreativeDisplay => true,

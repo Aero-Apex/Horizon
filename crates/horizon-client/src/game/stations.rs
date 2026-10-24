@@ -1890,7 +1890,10 @@ impl Game<'_> {
         let w = lines
             .iter()
             .zip(&rows)
-            .map(|((t, _), row)| row.as_ref().map_or_else(|| measure(t), |r| r.width(&measure)))
+            .map(|((t, _), row)| {
+                row.as_ref()
+                    .map_or_else(|| measure(t), |r| r.width(&measure))
+            })
             .fold(0.0, f32::max);
         let line_height = |i: usize| rows[i].as_ref().map_or(10.0, |r| r.height() as f32);
         let h = if lines.len() == 1 {
