@@ -381,8 +381,27 @@ fn link(target: &Path, at: &Path) -> io::Result<()> {
         fs::copy(target, at).map(|_| ())
     }
 }
+/// Without symlinks, an untouched vanilla directory is rebuilt in the overlay
+/// file by file: hard links, or copies where the two paths are on different
+/// volumes.
+#[cfg(not(unix))]
+fn link_tree(target: &Path, at: &Path, dependencies: &mut cache::Dependencies) -> io::Result<()> {
+    dependencies.directory(target);
+    fs::create_dir_all(at)?;
+    for entry in fs::read_dir(target)? {
+        let entry = entry?;
+        let (from, to) = (entry.path(), at.join(entry.file_name()));
+        if from.is_dir() {
+            link_tree(&from, &to, dependencies)?;
+        } else if fs::hard_link(&from, &to).is_err() {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
 /// Build `out` as `vanilla` with the packs' files layered on top (packs in
-/// load order, last wins). Untouched directories are symlinks into vanilla.
+/// load order, last wins). Untouched directories are symlinks into vanilla
+/// (hard-linked copies where there are no symlinks).
 pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()> {
     cache::build(vanilla, packs, out)
 }
@@ -532,8 +551,14 @@ fn build_overlay_uncached(
                 // Hidden by a pack's filter.
             } else {
                 #[cfg(not(unix))]
-                if vanilla.join(&child).is_file() {
-                    dependencies.file(&vanilla.join(&child));
+                {
+                    if vanilla.join(&child).is_dir() {
+                        link_tree(&vanilla.join(&child), &out.join(&child), dependencies)?;
+                        continue;
+                    }
+                    if vanilla.join(&child).is_file() {
+                        dependencies.file(&vanilla.join(&child));
+                    }
                 }
                 link(&vanilla.join(&child), &out.join(&child))?;
             }
@@ -943,6 +968,19 @@ mod tests {
         )
         .unwrap();
         fs::write(vanilla.join("facts.json"), b"[]").unwrap();
+        // Directories no pack touches must still be in the overlay, nested ones too.
+        fs::create_dir_all(vanilla.join("assets/minecraft/textures/font")).unwrap();
+        fs::write(
+            vanilla.join("assets/minecraft/textures/font/ascii.png"),
+            b"glyphs",
+        )
+        .unwrap();
+        fs::create_dir_all(vanilla.join("assets/minecraft/sounds/ambient")).unwrap();
+        fs::write(
+            vanilla.join("assets/minecraft/sounds/ambient/cave1.ogg"),
+            b"cave",
+        )
+        .unwrap();
         let pack_dir = base.join("packs/Mine");
         fs::create_dir_all(pack_dir.join("assets/minecraft/textures/block")).unwrap();
         fs::write(
@@ -980,6 +1018,14 @@ mod tests {
             br#"{"a":"vanilla","b":"pack"}"#
         );
         assert_eq!(fs::read(out.join("facts.json")).unwrap(), b"[]");
+        assert_eq!(
+            fs::read(out.join("assets/minecraft/textures/font/ascii.png")).unwrap(),
+            b"glyphs"
+        );
+        assert_eq!(
+            fs::read(out.join("assets/minecraft/sounds/ambient/cave1.ogg")).unwrap(),
+            b"cave"
+        );
         let _ = fs::remove_dir_all(base);
     }
     #[test]

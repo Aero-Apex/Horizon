@@ -8,7 +8,7 @@ use std::io::Read;
 use std::{collections::BTreeSet, fs, io, path::Path, path::PathBuf};
 
 // Bump when overlay/merge semantics change. Markers are disposable cache data.
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Dependencies {
