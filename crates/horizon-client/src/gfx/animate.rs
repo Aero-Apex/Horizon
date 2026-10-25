@@ -212,6 +212,11 @@ impl SpriteAnimator {
         }
     }
 
+    /// The layers the last `animate` rewrote (for the shader pack atlas).
+    pub fn changed(&self) -> &[u32] {
+        &self.changed
+    }
+
     /// Show every sprite's frame at `tick`, rewriting only the sprites whose
     /// frame or mix changed (`SpriteContents.AnimationState.tick`).
     pub fn animate(
@@ -250,6 +255,7 @@ impl SpriteAnimator {
     /// its layer shows; the number of jobs.
     fn collect(&mut self, tick: u64) -> usize {
         let mut count = 0;
+        self.changed.clear();
         for sprite in &mut self.sprites {
             let blend = sprite.animation.blend(tick);
             if sprite.shown == Some(blend) {

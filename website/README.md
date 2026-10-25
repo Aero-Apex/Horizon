@@ -10,6 +10,9 @@ stone texture and a pixel landscape drawn in code (`scripts/art.mjs`), and short
 releases, the community links and the contributors. Plain HTML, CSS and JavaScript; no framework and
 no runtime dependencies.
 
+Home, Releases, Benchmarks and every Docs page share the header and phone menu rendered by
+`build.mjs`, with the same links, theme switch and Download button.
+
 ## Layout
 
 ```
@@ -19,17 +22,26 @@ docs/nav.json      the order of the pages and the groups of the left navigation
 serve.mjs          a tiny static server for local checks
 src/index.html     the page, with {{placeholders}} build.mjs fills
 src/404.html       the not-found page
+src/privacy.html   what the launcher can send when players allow it, retention, deletion (/privacy)
 src/releases.html  every release, newest first, with what it adds and fixes, its notes and downloads (/releases)
+src/benchmarks.html Horizon against vanilla 26.3 on our machines, the hardware picker, players' results (/benchmarks)
 src/docs.html      the template of every documentation page (/docs/...), with its left navigation
 src/tokens.css     the design tokens, generated from crates/horizon-theme (do not edit)
 src/style.css      every style, on top of the tokens
 src/main.js        the home page: download buttons, recent releases, links, contributors, nav, tabs, lightbox, motion
 src/chrome.js      the light/dark switch, the phone menu and GitHub fetching, shared by the pages
 src/releases-page.js  the Releases page: the channel filter and the refresh from GitHub
+src/benchmarks-page.js  the Benchmarks page: players' results from the telemetry server, the picker
+src/docs-page.js    the Docs pages: the shared theme switch and phone menu
+src/bench.js       the Benchmarks tables, shared by build and page
+src/hardware.js    the spec table estimates use (GPU TFLOPS and bandwidth, CPU single-thread score)
+src/estimate.js    estimates for unmeasured hardware from the nearest measured machine
 src/markdown.js    a small Markdown renderer (escapes everything), shared by build and page
 src/releases.js    the home page's "Recently added" and the Releases page's markup, shared by build and page
 src/contributors.js the contributors' filtering and markup, shared by build and page
-public/            fonts, screenshots, icons, og.png, robots.txt: copied as is (sitemap.xml is written by the build)
+public/            fonts, screenshots, icons, og.png, robots.txt, benchmarks.json: copied as is (sitemap.xml is written by the build)
+data/benchmarks/   our raw benchmark reports (tools/perf_bench.py) and fleet.json, the list scripts/benchmarks.mjs reads
+scripts/benchmarks.mjs  benchmark reports -> public/benchmarks.json (ours, and players' groups of 3+ installs)
 scripts/assets.mjs rebuilds public/ from the repo (fonts to WOFF2, images to WebP, the pixel art)
 scripts/art.mjs    draws the stone tile and the hero's landscape (PNG, one pixel per texel)
 scripts/shots.mjs  Playwright screenshots at every width, and og.png
@@ -49,8 +61,8 @@ shots/             (gitignored) full-page screenshots at 360–1920 px, a 1250×
   fails if the README has no parity table, so a broken README never deploys.
 - **Fetched by the page**: the releases (the download button picks the newest
   `launcher-v*` release's asset for the visitor's OS, the home page lists the newest game releases, and
-  the Releases page reloads its list when GitHub has a newer release),
-  the contributors (avatars come from `avatars.githubusercontent.com`),
+  the Releases page reloads its list when GitHub has a newer release), players' benchmark results
+  (`GET https://telemetry.playhorizon.dev/v1/benchmarks/summary`, 3-second timeout), the contributors (avatars come from `avatars.githubusercontent.com`),
   and `links.json` from `main`. Each
   falls back to what was built in, and the download button to the releases page.
 
@@ -113,3 +125,15 @@ GitHub's anonymous rate limit is hit.
 
 ## Benchmarks
 
+`public/benchmarks.json` is what the Benchmarks page shows: `{ format: "horizon-benchmark-summary", version: 1,
+generated, min_installs, groups }`, one group per GPU, CPU, render distance and game (`horizon`, `vanilla`) with
+`medians` (`avg_fps`, `low_1pct_fps`, `p95_ms`, `world_ms`, `chunk_load_ms`, `rss_peak_mb`, `rss_steady_mb`).
+Groups `"source": "us"` are our runs (with the machine, date, version and the four scenes); groups `"source":
+"players"` come from players' `benchmark` uploads (docs/telemetry.md) and need at least `min_installs` (3)
+different installs. The telemetry server's `GET /v1/benchmarks/summary` answers in the same shape; the page asks it
+for players' groups and keeps the baked ones when it doesn't answer. The rules are in `scripts/benchmarks.mjs`, with
+a fixture set (`scripts/fixtures/benchmarks/`) the server's test shares.
+
+To publish new measurements: run `tools/perf_bench.py` for Horizon and vanilla on a machine (docs/benchmark.md), copy
+the reports into `data/benchmarks/`, list them in `data/benchmarks/fleet.json`, then
+`node scripts/benchmarks.mjs --ours data/benchmarks/fleet.json`.

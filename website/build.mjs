@@ -12,6 +12,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markdown, inline, section, escape } from "./src/markdown.js";
 import { recentHtml, releasesPageHtml } from "./src/releases.js";
+import { machinesHtml, playersHtml } from "./src/bench.js";
+import { CPUS, GPUS, singleThread } from "./src/hardware.js";
 import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
 
@@ -127,6 +129,11 @@ const ours = releases.filter((r) => isGame(r.tag_name) || isLauncher(r.tag_name)
 const game = ours.filter((r) => isGame(r.tag_name));
 const launcher = releases.filter((r) => isLauncher(r.tag_name) && !r.prerelease).sort(byTag)[0];
 
+// --- The benchmarks ----------------------------------------------------------------------
+
+// public/benchmarks.json: our measurements (scripts/benchmarks.mjs from data/benchmarks/fleet.json) and, once the
+// telemetry server has some, players' groups. The page shows it baked and asks the server for newer player results.
+const benchSummary = JSON.parse(await readFile(join(site, "public", "benchmarks.json"), "utf8"));
 
 // --- The page --------------------------------------------------------------------------
 
@@ -163,7 +170,7 @@ await writeFile(join(dist, "favicon.ico"), Buffer.concat([ico, png32]));
 const names = {};
 const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
 // Dependencies before what imports them.
-const modules = ["markdown.js", "versions.js", "chrome.js", "releases.js", "contributors.js", "main.js", "releases-page.js"];
+const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "main.js", "releases-page.js", "benchmarks-page.js", "docs-page.js"];
 for (const file of modules) {
   const code = rewrite(await readFile(join(site, "src", file), "utf8"));
   names[file] = `${file.replace(".js", "")}.${fingerprint(code)}.js`;
@@ -194,13 +201,16 @@ const baked = {
 
 const unavailable = `<p class="lede">The release notes could not be loaded here.</p><a class="button secondary" href="https://github.com/${REPO}/releases">Read them on GitHub</a>`;
 
-// The top bar and the footer of the pages beside the home page (Releases).
-const navLinks = [["/#about", "About"], ["/releases", "Releases"], ["/docs/", "Docs"]];
-const siteNav = (current) => `    <header class="nav is-scrolled" id="top">
+// One top bar and phone menu for Home, Releases, Benchmarks and every Docs page.
+const navSections = [["/#about", "About"], ["/#screenshots", "In game"], ["/#parity", "Parity"], ["/#launcher", "Launcher"], ["/#recent", "New", "Recently added"], ["/#community", "Community"]];
+const navPages = [["/releases", "Releases"], ["/benchmarks", "Benchmarks"], ["/docs/", "Docs", "Documentation"]];
+const navLink = ([href, label, menuLabel], current, menu = false) =>
+  `<a href="${href}"${href === current ? ' aria-current="page"' : ""}${href === "/#contributors" ? ` data-contributors${contributors.length ? "" : " hidden"}` : ""}>${menu && menuLabel ? menuLabel : label}</a>`;
+const siteNav = (current) => `    <header class="nav" id="top">
       <div class="nav-inner">
         <a class="nav-mark" href="/" aria-label="Horizon, home"><svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><path class="mark-stem" d="M4 3h2v4H4zM10 3h2v4h-2z"/><path class="mark-low" d="M4 8h2v4H4zM10 8h2v4h-2z"/><path class="mark-line" d="M1 7h14v1H1z"/></svg>Horizon</a>
-        <nav class="nav-links" aria-label="Pages">
-${navLinks.map(([href, label]) => `          <a href="${href}"${href === current ? ' aria-current="page"' : ""}>${label}</a>`).join("\n")}
+        <nav class="nav-links" id="nav-links" aria-label="Sections and pages">
+${[...navSections, ...navPages].map((link) => `          ${navLink(link, current)}`).join("\n")}
         </nav>
         <div class="nav-end">
           <button class="theme-toggle" type="button" aria-label="Switch between light and dark"><span data-theme-label>Dark</span></button>
@@ -211,9 +221,8 @@ ${navLinks.map(([href, label]) => `          <a href="${href}"${href === current
       </div>
     </header>
     <div class="menu" id="menu" hidden>
-      <nav aria-label="Pages">
-        <a href="/">Home</a>
-${navLinks.map(([href, label]) => `        <a href="${href}">${label}</a>`).join("\n")}
+      <nav aria-label="Sections and pages">
+${[...navSections, ["/#contributors", "Contributors"], ...navPages].map((link) => `        ${navLink(link, current, true)}`).join("\n")}
       </nav>
       <div class="menu-foot">
         <a class="button secondary large" href="https://github.com/${REPO}">GitHub</a>
@@ -224,12 +233,21 @@ const siteFooter = `    <footer class="footer">
       <div class="container">
         <div class="footer-bar">
           <span class="footer-mark">Made in the open, in Rust.</span>
-          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/releases">Releases</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/LEGAL.md">Assets</a></nav>
+          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
         </div>
       </div>
       <p class="footer-word" aria-hidden="true">horizon</p>
     </footer>`;
 
+const fixed = (x, n) => Number(x).toFixed(n);
+const specTable =
+  `<table class="bench-table spec"><thead><tr><th scope="col">Graphics card</th><th scope="col">FP32 TFLOPS</th><th scope="col">Bandwidth, GB/s</th><th scope="col">Memory, GB</th></tr></thead><tbody>` +
+  GPUS.map((g) => `<tr><th scope="row">${escape(g.name)}</th><td class="num">${fixed(g.tflops, 1)}</td><td class="num">${g.gbps}</td><td class="num">${g.vram_gb || "shared"}</td></tr>`).join("") +
+  `</tbody></table><table class="bench-table spec"><thead><tr><th scope="col">Processor</th><th scope="col">Boost, GHz</th><th scope="col">Generation factor</th><th scope="col">Single-thread score</th></tr></thead><tbody>` +
+  CPUS.map((c) => `<tr><th scope="row">${escape(c.name)}</th><td class="num">${fixed(c.ghz, 2)}</td><td class="num">${fixed(c.ipc, 2)}</td><td class="num">${fixed(singleThread(c), 2)}</td></tr>`).join("") +
+  `</tbody></table>`;
+const options = (list, selected) => list.map((x) => `<option${x.name === selected ? " selected" : ""}>${escape(x.name)}</option>`).join("");
+const playersGroups = benchSummary.groups.filter((g) => g.source === "players");
 
 const values = {
   CSS: `/assets/${cssName}`,
@@ -245,10 +263,19 @@ const values = {
   RECENT: recentHtml(game) || unavailable,
   SITE_NAV: "",
   SITE_FOOTER: siteFooter,
+  DOCS_JS: `/assets/${names["docs-page.js"]}`,
   RELEASES_JS: `/assets/${names["releases-page.js"]}`,
   RELEASE_LIST: releasesPageHtml(ours) || unavailable,
   RELEASE_COUNT: ours.length ? `${ours.length} releases` : "",
   NEWEST_TAG: escape(ours[0]?.tag_name || ""),
+  BENCH_JS: `/assets/${names["benchmarks-page.js"]}`,
+  MACHINES: machinesHtml(benchSummary),
+  PLAYERS: playersHtml(benchSummary),
+  PLAYERS_SOURCE: `${playersGroups.length ? `${playersGroups.length} groups` : "No groups yet"}, as of ${benchSummary.generated.slice(0, 10)}. The page asks the telemetry server for newer ones.`,
+  GPU_OPTIONS: options(GPUS, "NVIDIA GeForce RTX 4060"),
+  CPU_OPTIONS: options(CPUS, "AMD Ryzen 5 5600X"),
+  SPEC_TABLE: specTable,
+  BENCH_DATA: JSON.stringify(benchSummary).replace(/</g, "\\u003c"),
   LAUNCHER_META: `${launcher ? `Launcher ${escape(launcherVersion(launcher.tag_name))} for` : "For"} Linux x86-64, macOS on Apple Silicon and Windows x64.`,
   DISCORD: escape(links.discord || DEFAULT_LINKS.discord),
   SPONSOR: escape(links.sponsor || DEFAULT_LINKS.sponsor),
@@ -326,12 +353,13 @@ const docPages = renderedDocs.map((d, i) => {
       DOC_BODY: d.html,
       DOC_PAGER: pagerLink(renderedDocs[i - 1], "prev") + pagerLink(renderedDocs[i + 1], "next"),
       DOC_FILE: d.file,
+      SITE_NAV: siteNav("/docs/"),
     },
   };
 });
 
-const pages = ["index.html", "404.html", "releases.html"];
-const currentPath = { "releases.html": "/releases" };
+const pages = ["index.html", "404.html", "privacy.html", "releases.html", "benchmarks.html"];
+const currentPath = { "releases.html": "/releases", "benchmarks.html": "/benchmarks" };
 for (const page of pages) {
   let html = await readFile(join(site, "src", page), "utf8");
   const own = { ...values, SITE_NAV: siteNav(currentPath[page]) };
@@ -361,7 +389,7 @@ const hashes = (re) => [...new Set([...allHtml.matchAll(re)].map((m) => `'sha256
 await writeFile(join(dist, ".csp-script"), hashes(/<script>([\s\S]*?)<\/script>/g));
 await writeFile(join(dist, ".csp-style"), hashes(/<style>([\s\S]*?)<\/style>/g));
 
-const urls = ["/", "/releases", ...docs.map((d) => d.path)];
+const urls = ["/", "/releases", "/benchmarks", ...docs.map((d) => d.path), "/privacy"];
 await writeFile(
   join(dist, "sitemap.xml"),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>https://playhorizon.dev${u}</loc></url>`).join("\n")}\n</urlset>\n`,
@@ -369,5 +397,5 @@ await writeFile(
 
 console.log(
   `built dist/ from ${readmeFrom}: ${body.length} subsystems, ${percent}, ${harnesses} harnesses, ` +
-    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${contributors.length} contributors, ${docs.length} docs pages`,
+    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${benchSummary.groups.length} benchmark rows, ${contributors.length} contributors, ${docs.length} docs pages`,
 );
