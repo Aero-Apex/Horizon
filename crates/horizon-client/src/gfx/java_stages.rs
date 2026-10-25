@@ -495,6 +495,9 @@ struct FolderShadow {
 /// What every pass of the pack shares.
 struct Common {
     linear: wgpu::Sampler,
+    /// `linear` without the mipmap levels, for a pass that asked for none (Iris binds those
+    /// textures unmipmapped): a sample in divergent flow can't land in a stale level.
+    linear_base: wgpu::Sampler,
     /// The block atlas's, as vanilla's: nearest, mipmapped.
     atlas: wgpu::Sampler,
     nearest: wgpu::Sampler,
@@ -1818,6 +1821,14 @@ impl Common {
         let unfilterable = wgpu::TextureSampleType::Float { filterable: false };
         Self {
             linear: sampler(Linear, ClampToEdge, None),
+            linear_base: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("Java shader pack unmipmapped"),
+                mag_filter: Linear,
+                min_filter: Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                lod_max_clamp: 0.0,
+                ..Default::default()
+            }),
             atlas: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("Java shader pack block atlas"),
                 mag_filter: Nearest,
@@ -2431,12 +2442,17 @@ impl PassGpu {
                     _ => blank_view(device, queue, blank, s, BlankKind::Color(false)),
                 }
             };
+            let linear = if self.mipmapped.is_empty() {
+                &common.linear_base
+            } else {
+                &common.linear
+            };
             let sampler = match (s.compare, s.source) {
                 _ if s.shared.is_some() => match s.shared.as_deref() {
                     Some("iris_compare") => &common.compare,
                     Some("iris_nearest") => &common.nearest,
                     Some("iris_repeat") => &common.repeat,
-                    _ => &common.linear,
+                    _ => linear,
                 },
                 (true, _) => &common.compare,
                 _ if s.signed.is_some() => &common.nearest,
@@ -2448,9 +2464,7 @@ impl PassGpu {
                 (false, Source::Atlas) => &common.atlas,
                 (false, Source::Target(i)) => {
                     match targets.get(&i).map(|t| sample_type(t.format)) {
-                        Some(wgpu::TextureSampleType::Float { filterable: true }) | None => {
-                            &common.linear
-                        }
+                        Some(wgpu::TextureSampleType::Float { filterable: true }) | None => linear,
                         _ => &common.nearest,
                     }
                 }

@@ -669,8 +669,12 @@ impl Game<'_> {
     /// The overlay over the inventory or creative screen that is drawn.
     pub(super) fn draw_jei_screen(&mut self, batch: &mut HudBatch) {
         let (ox, _) = self.inventory_origin(batch);
+        // The villager's window is 276 wide, shifted left of the inventory's origin.
+        let trading = self.station.as_ref().is_some_and(|s| s.merchant.is_some());
         let width = if self.screen == Screen::Creative {
             horizon_client::creative::Creative::WIDTH
+        } else if trading {
+            276.0 + super::trading::SHIFT
         } else {
             176.0
         };

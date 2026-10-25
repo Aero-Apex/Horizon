@@ -18,7 +18,7 @@ use horizon_client::{
 };
 
 /// The merchant screen is 100 px wider than the 176-px menus it shares an origin with.
-const SHIFT: f32 = -50.0;
+pub(super) const SHIFT: f32 = -50.0;
 const GREY: u32 = 0xFF40_4040;
 
 pub(super) struct MerchantState {

@@ -4258,7 +4258,11 @@ impl Renderer {
                 }
             }
             match self.flat.as_ref().filter(|_| flat_frame) {
-                _ if java_terrain => {}
+                // The sky's draws used to leave the index buffer set for the entities
+                // below; with the sky off nothing did.
+                _ if java_terrain => {
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
                 Some(flat) => {
                     pass.set_pipeline(&flat.solid);
                     let vertices = |p| self.arena.buffer(p);

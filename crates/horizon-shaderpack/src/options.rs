@@ -466,6 +466,11 @@ impl OptionSet {
     }
 }
 
+/// Options that need Iris's custom images (`IRIS_FEATURE_CUSTOM_IMAGES`), which Horizon
+/// doesn't provide: Complementary's `COLORED_LIGHTING` (Advanced Color Tracing) turns on its
+/// "not supported on Optifine" error screen when it is above 0. Kept at the pack's default.
+const UNSUPPORTED: &[&str] = &["COLORED_LIGHTING"];
+
 /// The player's values that differ from the defaults (`MutableOptionValues`).
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct OptionValues {
@@ -492,6 +497,11 @@ impl OptionValues {
         // A saved value the option doesn't list (an old or hand-edited
         // file) is dropped, as OptiFine's `ShaderOption.setValue` refuses it.
         for (name, o) in &options.strings {
+            // Options that need Iris features Horizon doesn't have stay at the
+            // pack's default, whatever a profile or file says.
+            if UNSUPPORTED.contains(&name.as_str()) {
+                continue;
+            }
             if let Some(v) = saved.get(name)
                 && *v != o.default
                 && o.allowed.contains(v)
@@ -517,6 +527,29 @@ mod tests {
             .into_values()
             .next()
             .map(|o| (o.name, o.default, o.allowed))
+    }
+
+    #[test]
+    fn options_that_need_iris_custom_images_stay_at_their_default() {
+        let mut options = OptionSet::default();
+        for (name, comment, default) in [
+            ("COLORED_LIGHTING", "[0 128 256]", "0"),
+            ("SHADOW_QUALITY", "[0 2 3]", "2"),
+        ] {
+            let o = StringOption::create(OptionKind::Define, name, Some(comment), default).unwrap();
+            options.add_string(&o);
+        }
+        let saved: BTreeMap<String, String> =
+            [("COLORED_LIGHTING", "256"), ("SHADOW_QUALITY", "3")]
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect();
+        let values = OptionValues::new(&options, &saved);
+        assert!(!values.strings.contains_key("COLORED_LIGHTING"));
+        assert_eq!(
+            values.strings.get("SHADOW_QUALITY").map(String::as_str),
+            Some("3")
+        );
     }
 
     #[test]
