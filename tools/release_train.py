@@ -67,7 +67,6 @@ LAUNCHER_PATHS = [
     "crates/horizon-port-pack/",
     "crates/horizon-prepare/",
     "crates/horizon-release-sign/",
-    "crates/horizon-telemetry/",
     "crates/horizon-theme/",
 ]
 LAUNCHER_IGNORED = ["launcher/links.json", "launcher/docs/", "launcher/tests/"]

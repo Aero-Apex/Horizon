@@ -53,5 +53,5 @@ file selects ~103.
 | 36 | Audio and music (38) | `L/audio.rs`, `L/sound_engine.rs`, `L/sound_events.rs`, `L/music.rs`, `G/music.rs`, `L/ambience.rs`, `G/subtitle_hud.rs` | sound_engine, sound_event, music, situational_music, ambient_sound, subtitle |
 | 37 | Integrated server and levels (34) | `G/integrated.rs`, `G/levels.rs`, `G/server_travel.rs` | server_dimension_players, `lan_e2e --server-thread` (portals, levels, distance, lava) |
 | 38 | Command parsing (34) | `L/command/` (`args.rs`, `selector.rs`, `tree_*.rs`, `vanilla.rs`) | command_parse (corpus `tools/command_parse_corpus.py`) |
-| 39 | Benchmarks and telemetry (34) | `L/benchmark.rs`, `tools/perf_bench.py`, `L/telemetry.rs`, `crates/horizon-telemetry*/`, `crates/horizon-bench/` | `python3 -m unittest tests.test_perf_bench`; [benchmark.md](benchmark.md) |
+| 39 | Benchmarks (34) | `L/benchmark.rs`, `tools/perf_bench.py`, `crates/horizon-bench/` | `python3 -m unittest tests.test_perf_bench`; [benchmark.md](benchmark.md) |
 | 40 | Explosions and TNT (31) | `G/explosion.rs`, `G/tnt.rs` | lan_e2e blast; no dedicated harness yet |

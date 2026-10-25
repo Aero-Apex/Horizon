@@ -27,7 +27,7 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
 
 ## Crates
 
-Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-server` are separate workspaces.
+Game workspace (root `Cargo.toml`); `launcher/` is a separate workspace.
 
 | Crate | Owns |
 |---|---|
@@ -44,7 +44,7 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 | `horizon-mods`, `horizon-mod-sdk`, `cargo-horizon-mod` | Sandboxed WebAssembly mods: runtime, SDK + WIT, `cargo horizon-mod` ([docs/mods.md](docs/mods.md)) |
 | `horizon-port-pack` | Porting Java modpacks ([docs/modpacks.md](docs/modpacks.md)) |
 | `horizon-theme` | Design tokens and fonts for the launcher, the game's own menus and the website |
-| `horizon-telemetry`, `horizon-telemetry-server`, `horizon-bench` | Opt-in data collection, its ingest server, the benchmark report format |
+| `horizon-bench` | The benchmark report format and the hardware probes |
 | `horizon-dualsense`, `horizon-threads`, `horizon-release-sign`, `horizon-bots`, `voxel-kernels`, `xtask` | DualSense output, thread priorities, signed release checksums, load-test bots, occupancy kernels, repo tasks |
 | `launcher/` | GPUI launcher: `main.rs` (UI), `backend.rs` (installs, updates), `cli.rs`, `mcp.rs`, `*_page.rs` |
 

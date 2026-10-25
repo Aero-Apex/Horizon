@@ -1850,7 +1850,7 @@ impl OptionsUi {
                     ("options.chat", Some(Page::Chat)),
                     ("options.resourcepack", Some(Page::Packs)),
                     ("options.accessibility", Some(Page::Accessibility)),
-                    // Vanilla's Telemetry Data and Credits slots: Horizon's
+                    // Vanilla's last two slots: Horizon's
                     // settings and its mods, as a mod adds its button here.
                     // Credits & Attribution (WinScreen's credits) follows them.
                     ("Horizon Settings...", Some(Page::Horizon)),
@@ -4808,7 +4808,7 @@ mod tests {
                 })
                 .collect()
         };
-        // Vanilla's Options buttons, Horizon's two in the Telemetry and Credits slots, then
+        // Vanilla's Options buttons, Horizon's two in the last slots, then
         // Credits & Attribution (WinScreen's credits).
         let main = pushes(&mut ui);
         assert_eq!(

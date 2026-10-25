@@ -85,13 +85,13 @@ impl Hardware {
     /// [`Hardware::detect`] with the kind of drive `game_dir` is on.
     pub fn detect_in(game_dir: &std::path::Path) -> Hardware {
         Hardware {
-            storage: horizon_telemetry::system::storage(game_dir).map(str::to_owned),
+            storage: crate::system::storage(game_dir).map(str::to_owned),
             ..Hardware::detect()
         }
     }
 }
 
-/// What the telemetry probes read (`horizon_telemetry::system`).
+/// What the hardware probes read (`crate::system`).
 struct Probes {
     cores: Option<u16>,
     base: Option<u32>,
@@ -100,7 +100,7 @@ struct Probes {
 }
 
 fn probes() -> Probes {
-    let s = horizon_telemetry::payload::System::detect();
+    let s = crate::system::System::detect();
     let some = |n: u32| (n > 0).then_some(n);
     Probes {
         cores: (s.cores > 0).then_some(s.cores),
@@ -132,7 +132,7 @@ pub fn load_average() -> Option<f64> {
 
 /// `ac` or `battery`; `None` where it can't be read (and on machines without a battery on Linux).
 pub fn power_source() -> Option<&'static str> {
-    horizon_telemetry::system::power()
+    crate::system::power()
 }
 
 /// Resident memory of a process, in bytes (macOS, Linux).

@@ -50,6 +50,3 @@ Include:
 
 A Horizon bug is any place where it differs from vanilla 26.3, so "vanilla does X and Horizon does Y" is the best report there is.
 
-## Data the launcher can send
-
-The launcher can send performance statistics, crash reports, bug reports and benchmarks, but only the kinds you allow, and everything is off until you say yes. See [Privacy](/privacy) for what is sent, how long it is kept and how to delete it.

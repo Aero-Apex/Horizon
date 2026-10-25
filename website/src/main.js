@@ -104,33 +104,6 @@ async function setUpLinks() {
   });
 }
 
-// --- Playing now ---------------------------------------------------------------------
-
-const TELEMETRY = "https://telemetry.playhorizon.dev";
-
-// How many play right now, from the games' anonymous "I'm playing" pings (Privacy explains them). The
-// server rounds it and makes it again at most every 15 seconds; the row stays hidden while nobody plays
-// or the server doesn't answer.
-async function setUpLive() {
-  const row = document.querySelector("[data-live]");
-  if (!row) return;
-  const update = async () => {
-    try {
-      const res = await fetch(`${TELEMETRY}/v1/live`, { signal: AbortSignal.timeout(3000) });
-      if (!res.ok) throw new Error(String(res.status));
-      const { playing } = await res.json();
-      if (!Number.isInteger(playing) || playing < 1) throw new Error("nobody");
-      row.querySelector("[data-live-count]").textContent = playing.toLocaleString("en");
-      row.hidden = false;
-      // It shows up after the others came in, so it skips their entrance.
-      row.classList.add("is-visible");
-    } catch {
-      row.hidden = true;
-    }
-  };
-  await update();
-  setInterval(() => document.visibilityState === "visible" && update(), 60_000);
-}
 
 // --- Navigation ----------------------------------------------------------------------
 
@@ -264,4 +237,3 @@ setUpDownload();
 setUpRecent();
 setUpLinks();
 setUpContributors();
-setUpLive();

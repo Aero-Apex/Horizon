@@ -91,44 +91,6 @@ enum AccountCmd {
 }
 
 #[derive(Subcommand)]
-enum DataCmd {
-    /// What is allowed, the install ID and how many items wait (the default)
-    Status,
-    /// Turn kinds on: performance, crashes, bugs, benchmarks, or all
-    Allow {
-        #[arg(required = true)]
-        kinds: Vec<String>,
-    },
-    /// Turn kinds off: performance, crashes, bugs, benchmarks, or all
-    Deny {
-        #[arg(required = true)]
-        kinds: Vec<String>,
-    },
-    /// Print exactly what would be sent
-    Show,
-    /// Delete everything sent from here, and what waits, and take a new install ID
-    Delete,
-    /// Send what is waiting now
-    Send,
-    /// Send a bug report you write; it is printed first, as it would leave
-    Bug {
-        text: String,
-        /// Add the end of the game's log (scrubbed, without chat)
-        #[arg(long)]
-        log: bool,
-        /// Send without asking
-        #[arg(long)]
-        yes: bool,
-    },
-    /// Upload a benchmark report (docs/benchmark-report.md); it is printed first
-    Benchmark {
-        file: PathBuf,
-        #[arg(long)]
-        yes: bool,
-    },
-}
-
-#[derive(Subcommand)]
 enum ModpackCmd {
     /// The imported packs and their coverage (the default)
     List,
@@ -326,12 +288,6 @@ enum Cmd {
         /// Remove the entry and the icon, and stop adding them back
         #[arg(long)]
         remove: bool,
-    },
-    /// Opt-in data collection (docs/telemetry.md): what is allowed, what would be sent, and
-    /// deleting it; all off until you allow a kind
-    Data {
-        #[command(subcommand)]
-        action: Option<DataCmd>,
     },
     /// Modpacks: import a Java pack, see its coverage report, port what this computer can and
     /// play it as its own profile (docs/modpacks.md)
@@ -751,7 +707,6 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
         }
         Cmd::Update { check } => update(check, as_json)?,
-        Cmd::Data { action } => data(action.unwrap_or(DataCmd::Status), as_json)?,
         Cmd::DesktopEntry { remove } => {
             let mut settings = backend::Settings::load();
             settings.desktop_entry = Some(!remove);
@@ -884,81 +839,6 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// `data`: the same consent as Settings → Data collection.
-fn data(action: DataCmd, as_json: bool) -> Result<(), String> {
-    use horizon_launcher::telemetry;
-    let review = |item: &horizon_telemetry::Item, yes: bool| -> Result<bool, String> {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(item).map_err(|e| e.to_string())?
-        );
-        if yes {
-            return Ok(true);
-        }
-        if !std::io::stdin().is_terminal() {
-            return Err("Add --yes to send it without asking.".into());
-        }
-        eprint!("Send this? [y/N] ");
-        let mut line = String::new();
-        std::io::stdin()
-            .read_line(&mut line)
-            .map_err(|e| e.to_string())?;
-        Ok(line.trim().eq_ignore_ascii_case("y"))
-    };
-    match action {
-        DataCmd::Status => {
-            let status = telemetry::status_json();
-            if as_json {
-                json(status);
-                return Ok(());
-            }
-            let consent = telemetry::consent();
-            if consent.needs_asking() {
-                println!("Not answered yet: nothing is collected.");
-            }
-            for (kind, name, _) in telemetry::SWITCHES {
-                let on = consent.allows(kind);
-                println!("{name}: {}", if on { "on" } else { "off" });
-            }
-            println!("Waiting to be sent: {}", status["waiting"]);
-            match horizon_telemetry::endpoint() {
-                Some(url) => println!("Server: {url}"),
-                None => println!("Server: turned off (HORIZON_TELEMETRY_URL=off), nothing is sent"),
-            }
-        }
-        DataCmd::Allow { kinds } => {
-            telemetry::set(&telemetry::parse_kinds(&kinds)?, true)?;
-            return data(DataCmd::Status, as_json);
-        }
-        DataCmd::Deny { kinds } => {
-            telemetry::set(&telemetry::parse_kinds(&kinds)?, false)?;
-            return data(DataCmd::Status, as_json);
-        }
-        DataCmd::Show => {
-            let (what, text) = telemetry::preview();
-            eprintln!("{what}");
-            println!("{text}");
-        }
-        DataCmd::Delete => println!("{}", telemetry::delete_my_data()?),
-        DataCmd::Send => println!("{:?}", telemetry::send()),
-        DataCmd::Bug { text, log, yes } => {
-            telemetry::ensure_allowed(horizon_telemetry::Kind::Bug)?;
-            let item = telemetry::bug_report(&text, log)?;
-            if review(&item, yes)? {
-                println!("{}", telemetry::submit(&item)?);
-            }
-        }
-        DataCmd::Benchmark { file, yes } => {
-            telemetry::ensure_allowed(horizon_telemetry::Kind::Benchmark)?;
-            let item = telemetry::benchmark_report(&file)?;
-            if review(&item, yes)? {
-                println!("{}", telemetry::submit(&item)?);
-            }
-        }
-    }
-    Ok(())
-}
-
 fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
     use horizon_launcher::servers::{self, NewServer, World};
     let find = |which: &str| {
@@ -1065,7 +945,7 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
 }
 
 fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
-    use horizon_launcher::browser::{installed, Kind, Query};
+    use horizon_launcher::browser::{Kind, Query, installed};
     use horizon_launcher::modpacks;
     let home = backend::game_home();
     let entry_json = |e: &installed::Entry| serde_json::to_value(e).unwrap_or_default();

@@ -108,8 +108,8 @@ jobs:
     timeout-minutes: ${{ matrix.mac && 60 || 40 }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
-      # The release's version, built in (horizon_core::release): --version, user agents, crash reports and
-      # telemetry say it. No version-bump commits.
+      # The release's version, built in (horizon_core::release): --version, user agents and crash reports
+      # say it. No version-bump commits.
       HORIZON_VERSION: ${{ needs.decide.outputs.version }}
     defaults:
       run:

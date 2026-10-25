@@ -2094,8 +2094,6 @@ pub enum Msg {
     PackLine(String),
     /// A modpack step ended: the pack as it now is.
     PackDone(Result<Box<crate::modpacks::Imported>, String>),
-    /// How many play Horizon now, or none when the server can't be reached (`telemetry`).
-    Playing(Option<u64>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -2197,10 +2195,6 @@ pub struct Settings {
     /// Dark, Light, or the system's: the launcher's look. Dark by default.
     #[serde(default)]
     pub appearance: Appearance,
-    /// The player has read what the "I'm playing" ping holds (`telemetry::PING`): on the
-    /// first-run question, or on the Play page once if they answered that before it existed.
-    #[serde(default)]
-    pub ping_notice_seen: bool,
 }
 
 impl Settings {
@@ -2282,9 +2276,10 @@ mod tests {
             .get_envs()
             .find(|(k, _)| *k == "PIPEWIRE_PROPS")
             .and_then(|(_, v)| v);
-        assert!(props.is_some_and(|v| v
-            .to_string_lossy()
-            .contains("application.name = \"Horizon\"")));
+        assert!(props.is_some_and(|v| {
+            v.to_string_lossy()
+                .contains("application.name = \"Horizon\"")
+        }));
     }
 
     #[test]
@@ -2850,9 +2845,11 @@ mod tests {
             Some("v2026.10.13".into())
         );
         assert!(is_prepared("v2026.10.13.1"));
-        assert!(resources_at(&versions.join("v2026.10.13.1"))
-            .join("worldgen/biomes.json")
-            .exists());
+        assert!(
+            resources_at(&versions.join("v2026.10.13.1"))
+                .join("worldgen/biomes.json")
+                .exists()
+        );
         let left: Vec<_> = fs::read_dir(versions.join("v2026.10.13.1/.local/horizon-client"))
             .unwrap()
             .flatten()

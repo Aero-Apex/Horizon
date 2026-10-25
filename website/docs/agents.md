@@ -11,7 +11,7 @@ Everything you can do with the mouse and keyboard, through commands instead of c
   - start the game, alone or with a world, or a server;
   - your settings and the extra game arguments;
   - the mod browser (mods, resource packs, shader packs, modpacks), imported modpacks and hosted servers;
-  - your accounts (names only), logs and crash reports, patch notes, the data collection settings and the benchmark.
+  - your accounts (names only), logs and crash reports, patch notes, and the benchmark.
 - **In the game:**
   - read what is on screen (every button, slider, field and slot, by name), click and type;
   - move, look, mine, place, attack, use items and pick from the hotbar;

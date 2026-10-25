@@ -24,7 +24,6 @@ pub(super) struct StartupMenu {
     selection: AppendSelection,
     pub pending: Option<PendingWorldEntry>,
     pub reload_packs: bool,
-    pub perf: horizon_client::telemetry::Session,
 }
 
 impl StartupMenu {
@@ -57,7 +56,6 @@ impl StartupMenu {
             menu.options_open = true;
         }
         if menu.pending.is_some() {
-            menu.perf.world_opening();
         }
         Ok(menu)
     }
@@ -87,7 +85,6 @@ impl StartupMenu {
         game.physical_keys = std::mem::take(&mut self.physical_keys);
         game.clipboard = std::mem::take(&mut self.clipboard);
         game.text_selection = std::mem::take(&mut self.selection);
-        game.perf = std::mem::take(&mut self.perf);
         // Preserve an existing resource-error screen opened by start_game.
         if self.options_open {
             let resource_error = game.ui.options.resource_error.take();
@@ -129,7 +126,6 @@ impl StartupMenu {
             _ => return,
         };
         self.pending = Some(entry);
-        self.perf.world_opening();
     }
 
     fn shortcut(&mut self, event: &KeyEvent) -> Option<clipboard::EditShortcut> {
@@ -484,7 +480,6 @@ impl Loading {
             {
                 if event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
                     self.menu.pending = None;
-                    self.menu.perf.cancel_world_opening();
                 }
             }
             _ if self.gui.is_none() || self.menu.pending.is_some() => {}

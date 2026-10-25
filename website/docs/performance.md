@@ -29,7 +29,7 @@ The full tables, with the method and the Linux software-rendering run, are in [d
 horizon-client --benchmark standard --render-distance 16
 ```
 
-It creates a world, flies the four scenes and writes a report to the `benchmarks` folder in the game folder. If you allow benchmark uploads in the launcher's data collection settings, you can share it. See [Privacy](/privacy).
+It creates a world, flies the four scenes and writes a report to the `benchmarks` folder in the game folder.
 
 ## Servers
 

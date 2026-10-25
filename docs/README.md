@@ -19,7 +19,6 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [Launcher](../launcher/README.md): installs, updates and starts builds; its CLI and MCP server; releasing it.
 - [Versioning](versioning.md): how releases are numbered from 0.2 (`v0.2.x`, `launcher@0.2.x`), how installs from before 0.2 get there, and the steps for the day 0.2 ships.
 - [Resource packs](resource-packs.md): everything a 26.3 resource pack can change, whether Horizon honours it, and the proof.
-- [Opt-in data collection](telemetry.md): the consent, exactly what is sent, how it is stored and sent.
 - [Benchmark report format](benchmark-report.md): the versioned JSON every benchmark writes (game, launcher, `tools/perf_bench.py`), the local log and, with consent, the upload.
 - Menus: every screen is vanilla's (title, world list, create world, multiplayer, options, pause). Horizon's own settings hang off vanilla's Options the way mods add theirs: **Horizon Settings...** and **Mods...** in the last two slots of the Options grid (Horizon Settings opens Graphics, Advanced Graphics, Shader Packs, Controller Settings, Extras and Mods, each a vanilla options list), with Horizon Graphics, Advanced Graphics and Shader Packs also at the top of Video Settings and Controller Settings at the bottom of Controls. The title screen's and pause menu's Friends buttons open Join a Friend and Play with Friends ([play-with-friends.md](play-with-friends.md)).
 

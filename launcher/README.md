@@ -235,13 +235,6 @@ machine only if you turn on crash reports (below).
 
 ## Data collection
 
-The first time it opens, the launcher asks whether you want to send performance statistics,
-crash reports, bug reports and benchmark uploads, each on its own switch and all off until you
-turn one on ("Send nothing" is one click). Settings → Data collection changes them any time, shows
-exactly what would be sent (the JSON), and deletes everything sent from your install. It asks
-again only when what is collected changes. The game obeys the same answer, kept in
-`telemetry/consent.json` in the game folder. What waits is sent when the launcher starts and
-closes. Every field, the caps and the format: [docs/telemetry.md](../docs/telemetry.md).
 
 
 ## Performance log
@@ -255,8 +248,7 @@ on purpose: it starts the launcher `--repeats` times (5; the first start is the 
 as the OS's file cache allows), switches pages for a few seconds in each, rests 3 seconds to
 measure idle CPU, fetches the release list 3 times, and writes one report there with means and
 95% confidence intervals. Its window has to be on a screen that is awake. Session logs stay on
-your machine; a `benchmark` report is uploaded, dated to the day, only if you allowed benchmark
-uploads ([data collection](../docs/telemetry.md)).
+your machine.
 
 ## Building
 

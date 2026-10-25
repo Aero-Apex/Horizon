@@ -11,4 +11,3 @@ pub mod servers;
 pub mod signed;
 pub mod sources;
 pub mod tailscale;
-pub mod telemetry;

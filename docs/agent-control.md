@@ -220,9 +220,8 @@ turn the switch off.
   CLI the flag is `--confirm`. The launcher CLI asks nothing: a person typing `remove` meant it.
 - **Ask before reaching out.** A command that sends data or reaches other people carries
   `openWorldHint`, and its description says "only when the player asks". In the game these are
-  `connect`, `lan`, `friends`, `chat` and `command`; in the launcher, `data allow`, `data send`,
-  `data bug`, `data benchmark` and `servers create`. `play`'s `join` argument says the same.
-  Telemetry stays opt-in, and only `data allow` turns it on.
+  `connect`, `lan`, `friends`, `chat` and `command`; in the launcher, 
+  `servers create`. `play`'s `join` argument says the same.
 - **No secrets.** No surface returns tokens, session files, keychain entries or invite secrets
   the player didn't ask to share:
   - accounts are names and UUIDs;
