@@ -116,10 +116,9 @@ commits) since the last **published** game release:
   `xtask/`, `packaging/`, `Cargo.toml`, `Cargo.lock`, `research-lock.json`, or an exporter `horizon-prepare`
   compiles (the `mods/horizon/src/test/java/dev/horizonlab/parity/*.java` files its sources name). Markdown never
   counts.
-- It releases when at least one pull request counts and the newest of them merged at least 5 minutes ago, so a wave
-  of merges becomes one release; if merges never pause, it releases once the oldest has waited 20 minutes. There is
-  no minimum time between releases: every settled player-facing change ships, limited only by the release already
-  building: many releases a day.
+- It releases in batches, so players get a few releases a day rather than one per merge: once 5 pull requests count
+  and the newest of them merged at least 5 minutes ago (a wave of merges becomes one release), or once the oldest has
+  waited 6 hours, however few they are.
 - A pull request labelled `release-now` (a crash or a blocker) releases at once.
 - A pull request labelled `skip-release` (work players don't see) doesn't count and isn't listed in the notes.
 - An open issue labelled `release-blocker` holds every game release, forced ones too (`held by release-blocker #N`).
@@ -299,7 +298,7 @@ and by hand; pushes to `launcher` and `launcher-*` branches only build.
 
 - `tools/release_train.py decide --kind launcher` counts the pull requests merged since the last published
   launcher release that changed those paths (not `launcher/links.json`, which the launcher reads from main, nor
-  tests or Markdown), with the same settling rule (5 minutes, at most 20), `release-now`, `skip-release` and `RELEASES_PAUSED`.
+  tests or Markdown), with the same batching rule (5 pull requests settled 5 minutes, or the oldest 6 hours), `release-now`, `skip-release` and `RELEASES_PAUSED`.
 - The tag is `launcher@X.Y.Z` on the release line (`launcher@0.2.0` first; the game and the launcher count their
   patches separately). Without `.github/release-line.txt`, `launcher-vX.Y.Z`: the patch after the last launcher tag,
   or the next minor (`X.Y+1.0`) when one of those pull requests is labelled `feature`. `launcher-v0.2.0` was taken
@@ -312,6 +311,15 @@ and by hand; pushes to `launcher` and `launcher-*` branches only build.
   launcher's tests, checks its libraries, and installs the latest game release with the new launcher.
 - Published with `--latest=false`: the repository's latest release stays a game release. Notes list the pull
   requests under New and Fixed; Kira posts launcher releases without pinging.
+
+Making a launcher release GitHub's latest instead would break servers: every `horizon-server` already installed,
+`install.sh` and `install.ps1` ask for `releases/latest` and expect the game's archives there, and a server that
+can't update can't fetch the fix either. So the game release stays the latest, and it sends people to the launcher
+(#1647): its notes open with a "Want to play? Download the Horizon launcher" block (`PLAYERS` in
+`tools/release_train.py`: raw HTML, which GitHub shows and launchers' notes skip; the site's Releases page leaves
+it out too), and its archives carry labels ("Game files the
+launcher installs: Linux (…)") that GitHub shows in place of the file names. Everything that downloads matches
+the asset's name, which is unchanged.
 
 Starting by hand, pausing and rolling back work as for the game (`gh workflow run launcher …`,
 `RELEASES_PAUSED`, `gh release edit launcher@X.Y.Z --draft`). Launchers older than the withdrawn release then

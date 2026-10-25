@@ -1,11 +1,14 @@
 //! Horizon launcher: installs Horizon builds, prepares them from the player's own Minecraft,
 //! and starts the client or a dedicated server.
 
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod agents_page;
 mod art;
 mod blocks;
 mod cli;
 mod cli_tools;
+mod console;
 mod cull;
 mod game_tools;
 mod internet;
@@ -18,12 +21,13 @@ mod perf;
 mod scrollbar;
 mod servers_page;
 mod theme;
+mod titlebar;
 
 use gpui::{
-    div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt, AnyElement, App,
-    Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Hsla,
-    KeyDownEvent, PathPromptOptions, SharedString, Stateful, Subscription, TitlebarOptions, Window,
-    WindowBounds, WindowOptions,
+    actions, div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt,
+    AnyElement, App, Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle,
+    FontWeight, Hsla, KeyBinding, KeyDownEvent, Menu, MenuItem, PathPromptOptions, SharedString,
+    Stateful, Subscription, Window, WindowBounds, WindowOptions,
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
@@ -40,7 +44,7 @@ use theme::Theme;
 enum Page {
     Play,
     Versions,
-    /// Mods, resource and shader packs, and modpacks (imported ones and the browser's).
+    /// Mods, resource packs and modpacks (imported ones and the browser's).
     Mods,
     Servers,
     Notes,
@@ -355,6 +359,9 @@ impl Launcher {
             self.switches += 1;
             self.content_scroll = Scrollbar::default();
             self.long_list = cull::Cull::default();
+            if page == Page::Mods {
+                self.mods.reset_lists();
+            }
         }
         self.picker_open = false;
     }
@@ -780,12 +787,13 @@ impl Launcher {
         // A little earlier than the spawn: file times can be coarse.
         self.client_started =
             Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
-        // The session (a network round trip when the token needs renewing) comes first;
-        // `drain` starts the game when it arrives.
-        self.starting_client = Some(tag);
+        // The built-in packs the resources lack and the session (a network round trip when the
+        // token needs renewing) come first; `drain` starts the game when the session arrives.
+        self.starting_client = Some(tag.clone());
         self.play_pressed = Some(Instant::now());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
+            backend::complete_packs(&tag);
             let session = (|| {
                 let mut accounts = Accounts::load();
                 let Some((a, secrets)) = account::session_for_launch(
@@ -1300,11 +1308,11 @@ fn megabytes(bytes: u64) -> String {
 // ----- Pages -------------------------------------------------------------------------------------
 
 impl Launcher {
-    /// The top bar: the mark and the name over the sidebar, the pages with their icons, then
-    /// the account playing and the Settings button.
+    /// The top bar: the mark and the name over the sidebar (in the title bar on Windows), the
+    /// pages with their icons, then the account playing and the Settings button.
     fn topbar(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let mut nav = div().flex().h_full().gap(px(2.));
+        let mut nav = div().flex().flex_none().h_full().gap(px(2.));
         for (page, label, icon) in Page::ALL {
             if page == Page::Settings {
                 continue;
@@ -1359,6 +1367,8 @@ impl Launcher {
         let account = keyboard(div().id("account"), &t)
             .relative()
             .flex()
+            .min_w_0()
+            .max_w(px(180.))
             .items_center()
             .gap(px(10.))
             .h(px(40.))
@@ -1382,8 +1392,10 @@ impl Launcher {
                 div()
                     .flex()
                     .flex_col()
+                    .min_w_0()
                     .child(
                         blocks::pixel(14., FontWeight::MEDIUM)
+                            .truncate()
                             .text_color(t.ink)
                             .child(name),
                     )
@@ -1435,25 +1447,29 @@ impl Launcher {
             .bg(t.side)
             .border_b_2()
             .border_color(t.outline)
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(10.))
-                    .w(px(theme::SIDEBAR - 18.))
-                    .child(mark(24., &t))
-                    .child(
-                        blocks::pixel(20., FontWeight::SEMIBOLD)
-                            .text_color(t.ink)
-                            .child("HORIZON"),
-                    ),
-            )
+            // Where the title bar is drawn here (Windows), it carries the mark and the name.
+            .when(!titlebar::DRAWN, |bar| {
+                bar.child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(10.))
+                        .w(px(theme::SIDEBAR - 18.))
+                        .child(mark(24., &t))
+                        .child(
+                            blocks::pixel(20., FontWeight::SEMIBOLD)
+                                .text_color(t.ink)
+                                .child("HORIZON"),
+                        ),
+                )
+            })
             .child(nav)
             .child(
                 div()
                     .ml_auto()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .gap(px(8.))
                     .child(account)
@@ -1822,7 +1838,7 @@ impl Launcher {
         wrap
     }
 
-    fn play_page(&mut self, cx: &mut Context<Self>) -> Div {
+    fn play_page(&mut self, banner_width: f32, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let Some(tag) = self.selected().cloned() else {
             // No hero without a version: the page starts below the top bar like the others.
@@ -1981,7 +1997,7 @@ impl Launcher {
 
         // The banner: Horizon's landscape (`art.rs`) under a veil of the page colour, the hero and
         // the Play row over it. It reaches the content's edges and the top bar.
-        let scene = self.art.scene(t.dark, self.scale);
+        let (scene, scene_width) = self.art.scene(t.dark, self.scale, banner_width);
         let veil = |angle: f32, from: f32, to: f32, at: f32| {
             div()
                 .absolute()
@@ -1994,15 +2010,14 @@ impl Launcher {
                     gpui::linear_color_stop(t.page.opacity(to), at),
                 ))
         };
-        let (w, h) = art::SCENE_SIZE;
         let banner = div()
             .relative()
             .flex()
             .flex_col()
             .justify_end()
             .min_h(px(340.))
-            .mx(px(-32.))
-            .px(px(32.))
+            .mx(px(-theme::PAGE_GUTTER))
+            .px(px(theme::PAGE_GUTTER))
             .pb(px(28.))
             .gap(px(24.))
             .overflow_hidden()
@@ -2014,8 +2029,8 @@ impl Launcher {
                     .absolute()
                     .bottom_0()
                     .left_0()
-                    .w(px(w as f32 * art::SCENE_TEXEL))
-                    .h(px(h as f32 * art::SCENE_TEXEL)),
+                    .w(px(scene_width))
+                    .h(px(art::SCENE_HEIGHT as f32 * art::SCENE_TEXEL)),
             )
             .child(veil(90., 0.82, 0., 0.62))
             .child(veil(180., 0., 0.75, 1.))
@@ -2838,7 +2853,7 @@ impl Launcher {
                 ))
             }
             Load::Ready(r) if r.is_empty() => return page.child(centered("No releases yet.", &t)),
-            Load::Ready(r) => r.clone(),
+            Load::Ready(r) => r,
         };
         // A hundred releases: only the rows near the screen are drawn.
         let keep = |i: usize| {
@@ -3075,7 +3090,7 @@ impl Launcher {
                     ),
                 )
             }
-            Load::Ready(r) => r.clone(),
+            Load::Ready(r) => r,
         };
         let list = self.long_list.clone().column(
             &self.content_scroll.handle,
@@ -3188,21 +3203,23 @@ impl Render for Launcher {
         self.friend_focused = self.friend_focus.is_focused(window);
         self.mods.note_focus(window);
         self.args_focused = self.args_focus.is_focused(window);
+        let size = window.viewport_size();
+        let banner_width = f32::from(size.width) - theme::SIDEBAR - scrollbar::GUTTER;
         let content = match self.page {
-            Page::Play => self.play_page(cx),
+            Page::Play => self.play_page(banner_width, cx),
             Page::Versions => self.versions_page(cx),
             Page::Mods => self.mods_page(cx),
             Page::Servers => self.servers_page(cx),
             Page::Notes => self.notes_page(cx),
             Page::Settings => self.settings_page(cx),
         };
+        self.art.free_replaced(window);
         // The new page fades in and rises a few pixels.
         let content = div()
             .relative()
             .w_full()
             // Let the page shrink inside the padded flex row so long notices can wrap.
             .min_w_0()
-            .max_w(px(1152.))
             .child(content)
             .with_animation(
                 ElementId::named_usize("page", self.switches),
@@ -3214,7 +3231,6 @@ impl Render for Launcher {
         if self.opening.is_none() && window.focused(cx).is_none() {
             window.focus(&self.root_focus);
         }
-        let size = window.viewport_size();
         let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
         let topbar = self.topbar(cx);
         let sidebar = self.sidebar(cx);
@@ -3270,7 +3286,9 @@ impl Render for Launcher {
                                         .child(
                                             div()
                                                 .flex()
-                                                .px(px(32.))
+                                                .w_full()
+                                                .min_w_0()
+                                                .px(px(theme::PAGE_GUTTER))
                                                 .pt(px(if self.page == Page::Play {
                                                     0.
                                                 } else {
@@ -3345,7 +3363,13 @@ impl Render for Launcher {
                     }),
             );
         }
-        root
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(t.side)
+            .children(titlebar::render(&t, window))
+            .child(root.flex_1().min_h_0())
     }
 }
 
@@ -3392,7 +3416,48 @@ impl Launcher {
     }
 }
 
+actions!(horizon_launcher, [Quit, CloseWindow]);
+
+/// What closing the last window does: stop the servers this launcher started,
+/// exit. A game that is running keeps running. Cmd+Q goes through here too.
+fn shut_down(cx: &mut App) {
+    servers_page::stop_on_quit();
+    cx.quit()
+}
+
+/// The macOS shortcuts: Cmd+Q quits, Cmd+W closes the window.
+#[cfg(target_os = "macos")]
+fn key_bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-w", CloseWindow, None),
+    ]
+}
+
+#[cfg(not(target_os = "macos"))]
+fn key_bindings() -> Vec<KeyBinding> {
+    Vec::new()
+}
+
+/// The menu bar on macOS, where "Quit" belongs to the app menu.
+fn menus() -> Vec<Menu> {
+    vec![
+        Menu {
+            name: "Horizon Launcher".into(),
+            items: vec![MenuItem::action("Quit Horizon Launcher", Quit)],
+        },
+        Menu {
+            name: "Window".into(),
+            items: vec![MenuItem::action("Close Window", CloseWindow)],
+        },
+    ]
+}
+
 fn main() {
+    if let Err(error) = console::attach_for_cli() {
+        eprintln!("Could not restore the launcher's terminal streams: {error}");
+        std::process::exit(1);
+    }
     perf::process_started();
     backend::exe_path();
     if let Some(code) = cli::run() {
@@ -3412,32 +3477,60 @@ fn main() {
                     Cow::Borrowed(horizon_theme::fonts::PIXEL_BOLD),
                 ])
                 .expect("bundled fonts");
+            cx.bind_keys(key_bindings());
+            cx.on_action(|_: &Quit, cx| shut_down(cx));
+            // The key press is being handled inside the window, so the window can only be
+            // removed once that update has finished.
+            cx.on_action(|_: &CloseWindow, cx| {
+                cx.defer(|cx| {
+                    for window in cx.windows() {
+                        let _ = window.update(cx, |_, window, _| window.remove_window());
+                    }
+                })
+            });
+            cx.set_menus(menus());
             let bounds = Bounds::centered(None, size(px(1180.), px(760.)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(960.), px(600.))),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Horizon".into()),
-                        ..Default::default()
-                    }),
+                    titlebar: Some(titlebar::options()),
                     app_id: Some("horizon-launcher".into()),
                     ..Default::default()
                 },
                 |window, cx| cx.new(|cx| Launcher::new(window, cx)),
             )
             .expect("window");
-            cx.on_window_closed(|cx| {
-                servers_page::stop_on_quit();
-                cx.quit()
-            })
-            .detach();
+            cx.on_window_closed(shut_down).detach();
             cx.activate(true);
         });
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cmd_q_quits_and_cmd_w_closes_the_window() {
+        use super::{key_bindings, CloseWindow, Quit};
+        use gpui::{Keymap, Keystroke};
+        let keymap = Keymap::new(key_bindings());
+        let key = |s: &str| [Keystroke::parse(s).unwrap()];
+        let (hit, _) = keymap.bindings_for_input(&key("cmd-q"), &[]);
+        assert!(hit.iter().any(|b| b.action().partial_eq(&Quit)));
+        let (hit, _) = keymap.bindings_for_input(&key("cmd-w"), &[]);
+        assert!(hit.iter().any(|b| b.action().partial_eq(&CloseWindow)));
+    }
+
+    #[test]
+    fn the_app_menu_has_quit() {
+        let menus = super::menus();
+        assert_eq!(menus[0].name, "Horizon Launcher");
+        assert!(matches!(
+            &menus[0].items[0],
+            gpui::MenuItem::Action { name, .. } if name == "Quit Horizon Launcher"
+        ));
+    }
+
     #[test]
     fn the_offline_name_is_read_from_its_key() {
         use super::player_name;

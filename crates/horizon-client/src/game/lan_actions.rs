@@ -595,6 +595,11 @@ impl Game<'_> {
             // A teleport (commands, a pearl) moves the guest; a pearl's is
             // sent even to where they stand (ServerPlayer.teleport).
             let at = [m.position.x, m.position.y, m.position.z];
+            // A hit with extra knockback stopped the guest's sprint
+            // (Player.causeExtraKnockback's setSprinting(false)).
+            if !m.sprinting {
+                g.sprinting = false;
+            }
             m.sprinting = false;
             let teleported = std::mem::take(&mut m.teleported);
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
@@ -1272,10 +1277,24 @@ impl Game<'_> {
         id: i32,
         location: Option<[f64; 3]>,
     ) -> Option<([f64; 3], [f64; 3])> {
+        let eye = {
+            let g = &host.hub.guests[gi];
+            [g.position[0], g.position[1] + g.eye_height(), g.position[2]]
+        };
         let object = || {
             let (lo, hi, origin) = self.object_target(id)?;
             let middle = [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
             let Some(l) = location else {
+                // A boat's mobs sit over its middle: aim low at its near
+                // side, so the ray meets the boat before them (the server
+                // attacks the entity it is sent).
+                let carries = u32::try_from(id).is_ok_and(|v| {
+                    self.boats.iter().any(|b| b.id == v) && !self.boat_mobs(v).is_empty()
+                });
+                if carries {
+                    let near = |k: usize| eye[k].clamp(lo[k] + 0.01, hi[k] - 0.01);
+                    return Some([near(0), lo[1] + 0.05, near(2)]);
+                }
                 return Some(middle);
             };
             let point = [0, 1, 2].map(|k| origin[k] + l[k]);
@@ -1306,7 +1325,6 @@ impl Game<'_> {
             }
         };
         let g = &mut host.hub.guests[gi];
-        let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
         let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
         let horizontal = (d[0] * d[0] + d[2] * d[2]).sqrt();
         g.yaw = (-d[0].atan2(d[2])).to_degrees() as f32;
@@ -1322,8 +1340,11 @@ impl Game<'_> {
             return;
         }
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
-            if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike()) {
-                self.pvp_land(host, victim, &strike);
+            if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike())
+                && self.pvp_land(host, victim, &strike)
+                && strike.stops_sprint()
+            {
+                self.as_guest(host, conn, |g| g.stop_sprint_after_extra_knockback());
             }
             return;
         }
@@ -1705,6 +1726,17 @@ impl Game<'_> {
                         g.use_delay -= 1;
                     }
                 });
+                // ServerPlayerGameMode.handleBlockBreakAction: a creative
+                // player's START breaks the block once (destroyAndAck) and
+                // leaves nothing being destroyed; its client sends no STOP.
+                // Kept, the dig broke whatever was put there next, every
+                // destroy delay, for as long as the player broke nothing else.
+                if digging.is_some()
+                    && host.hub.guests[gi].creative()
+                    && let Some(play) = host.play.get_mut(&conn)
+                {
+                    play.digging = None;
+                }
             }
             // Player.tick: a different main-hand item resets the attack
             // strength, and detectEquipmentUpdates gives the guest its modifiers.
@@ -1911,7 +1943,7 @@ impl Game<'_> {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
             let Some(player) = game.player.as_mut() else {
-                return Vec::new();
+                return (Vec::new(), None);
             };
             let mut w = MotionWorld {
                 entities: &[],
@@ -1987,21 +2019,43 @@ impl Game<'_> {
             game.border_damage();
             game.tick_mob_effects();
             let Some(player) = game.player.as_mut() else {
-                return Vec::new();
+                return (Vec::new(), None);
             };
             let _ = player.peaceful_regeneration(rules);
             let _ = player.food_tick(health, rules);
             events.append(&mut player.events);
-            events
+            let _ = MotionWorld {
+                entities: &[],
+                player,
+                scene: &mut game.world,
+                assets: &game.pack.assets,
+                collision_binding: game.collision,
+                resources: game.motion,
+            }
+            .server_travel();
+            // A hurt since the last tick marked the velocity (Entity.markHurt):
+            // ServerEntity.sendChanges sends it as it is after this travel.
+            let marked = std::mem::take(&mut player.health.sync_velocity);
+            let sounds = events
                 .into_iter()
                 .filter_map(|e| match e {
                     MotionEvent::HurtSound(sound) => Some(sound),
                     _ => None,
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (sounds, marked.then_some(player.velocity))
         });
-        for sound in sounds.into_iter().flatten() {
+        let Some((sounds, marked)) = sounds else {
+            return;
+        };
+        for sound in sounds {
             self.player_hurt_sound(sound, at);
+        }
+        if let (Some(v), Some(g)) = (marked, host.hub.guest(conn)) {
+            g.send(&C::SetEntityMotion(play::SetEntityMotion {
+                id: g.entity_id,
+                velocity: [v.x, v.y, v.z],
+            }));
         }
     }
 

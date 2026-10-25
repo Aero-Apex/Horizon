@@ -12,17 +12,20 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   folders in `HORIZON_HOME` (the game's data), `HORIZON_LAUNCHER_HOME`, `XDG_DATA_HOME` and
   `XDG_CONFIG_HOME`, plus `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` and `HORIZON_NO_AUDIO=1`. Never write to
   `~/.local/share/{applications,horizon,horizon-launcher}` or `~/.local/bin`.
-- **Mark what an agent posts.** A PR body starts with
-  `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.` (issues: "Filed by", reviews:
-  "Review by"); every comment starts with `🤖 Agent:`. Never write as Ludovic.
-- **Attribution.** Commits end with `Co-Authored-By: Claude <model> <noreply@anthropic.com>`; PR bodies end
-  with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- **Mark what an agent posts.** A PR body starts with a line naming whose agent opened it and with what.
+  Ludovic's agents write `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, and a
+  contributor's agent names its own person and tool (issues: "Filed by", reviews: "Review by"). Every
+  comment starts with `🤖 Agent:`. Never write as Ludovic or as anyone else.
+- **Attribution.** Commits end with a `Co-Authored-By:` line for the agent that wrote them, and PR bodies
+  with that agent's own "Generated with" line. Ludovic's agents use
+  `Co-Authored-By: Claude <model> <noreply@anthropic.com>` and
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - Everything players run is Rust. Python/Java only for dev tools and harness drivers in `tools/`.
 - Horizon-only features follow [docs/design-system.md](docs/design-system.md) and are off by default where
   they would change the vanilla look.
 - Small PRs (< ~500 lines). Labels: `feature` (players get something new), `skip-release` (they see no
-  change), none for a fix. Agents never add `release-now`: the maintainer decides it. Every merge to main ships
-  ([docs/release-flow.md](docs/release-flow.md)).
+  change), none for a fix. Agents never add `release-now`: the maintainer decides it. Merges ship in batches of 5, or after
+  6 hours ([docs/release-flow.md](docs/release-flow.md)).
 - Contributors first: `gh pr list --state open --search <area>` before you start; never duplicate theirs.
 
 ## Crates
@@ -40,12 +43,11 @@ Game workspace (root `Cargo.toml`); `launcher/` is a separate workspace.
 | `horizon-server` | `horizon-server`: `server.toml`, CLI, supervisor of the headless game ([docs/hosting.md](docs/hosting.md)) |
 | `horizon-server-files` | `server.properties`, eula, ops/whitelist/bans, usercache |
 | `horizon-friends`, `horizon-relay` | Play with Friends: invite codes, encrypted tunnel, the relay ([docs/play-with-friends.md](docs/play-with-friends.md)) |
-| `horizon-shaderpack` | OptiFine/Iris packs: preprocessor, GLSL → WGSL ([docs/shader-packs.md](docs/shader-packs.md)) |
 | `horizon-mods`, `horizon-mod-sdk`, `cargo-horizon-mod` | Sandboxed WebAssembly mods: runtime, SDK + WIT, `cargo horizon-mod` ([docs/mods.md](docs/mods.md)) |
 | `horizon-port-pack` | Porting Java modpacks ([docs/modpacks.md](docs/modpacks.md)) |
 | `horizon-theme` | Design tokens and fonts for the launcher, the game's own menus and the website |
 | `horizon-bench` | The benchmark report format and the hardware probes |
-| `horizon-dualsense`, `horizon-threads`, `horizon-release-sign`, `horizon-bots`, `voxel-kernels`, `xtask` | DualSense output, thread priorities, signed release checksums, load-test bots, occupancy kernels, repo tasks |
+| `horizon-dualsense`, `horizon-threads`, `horizon-release-sign`, `horizon-bots`, `xtask` | DualSense output, thread priorities, signed release checksums, load-test bots, repo tasks |
 | `launcher/` | GPUI launcher: `main.rs` (UI), `backend.rs` (installs, updates), `cli.rs`, `mcp.rs`, `*_page.rs` |
 
 Other top-level folders: `tools/` (harnesses and dev scripts), `tests/` (Python unit tests: `python3 -m
@@ -123,7 +125,6 @@ python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
 | Input | game.rs `fn window_event`, `fn key_pressed`, `fn play_mouse`; L: `keybinds.rs`, `keymapping.rs`, `key_names.rs`, `mouse.rs`, `input.rs`, `interaction_input.rs`, `gamepad.rs`, `osk.rs`, `clipboard.rs`; G: `pad.rs`, `pad_menu.rs` |
 | Audio | L: `audio.rs` (mixer), `sound_engine.rs`, `sound_events.rs`, `music.rs`, `ambience.rs`; G: `music.rs`, `subtitle_hud.rs` |
 | Resource packs | L: `packs.rs` + `packs/`, `pack_screen.rs`, `atlas_sources.rs`, `sprites.rs`, `mipmap.rs`, `model_library.rs`, `font.rs`, `lang.rs`; crate `horizon-assets`; G: `packs.rs` |
-| Shader packs | L: `shader_pack.rs` (Horizon WGSL packs), `java_pack.rs` + crate `horizon-shaderpack` (Iris/OptiFine), `gfx/pack_stages.rs`, `gfx/java_stages.rs`; G: `shader_packs.rs` |
 | Agent control | L: `control.rs` (socket), `bin/horizon-ctl/`; G: `control.rs`, `agent.rs`, `events.rs`, `ui_control.rs` ([docs/agent-control.md](docs/agent-control.md)) |
 | Mods | crate `horizon-mods`; G: `mods.rs`; L: `mod_content.rs`, `mod_list.rs` |
 | Horizon extras, settings | L: `extras.rs`, `graphics.rs`, `settings.rs`, `minimap.rs`; G: `extras.rs`, `tweaks.rs`, `options.rs` |
@@ -148,19 +149,19 @@ python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
 
 ## The two single-player paths
 
-1. **In-frame (default since #1428):** the window's `Game` ticks the world itself, one level that follows
-   the player (`fn enter_dimension`). This is what Stable players run and what harnesses test.
-2. **Server thread (`--server-thread` or `HORIZON_SERVER_THREAD=1`):** `game/integrated.rs` runs a second
-   `Game` (`serving`) on a "Server thread" with one level per dimension; the window joins it as a client
-   through memory (`remote`), exactly as a LAN guest or a dedicated server's player does. Not at parity yet:
-   open `[server-thread]` issues list the gaps.
+1. **Server thread (default since #1514):** `game/integrated.rs` runs a second `Game` (`serving`) on a
+   "Server thread" with one level per dimension; the window joins it as a client through memory (`remote`),
+   exactly as a LAN guest or a dedicated server's player does. This is what players run. Open
+   `[server-thread]` issues list the gaps left.
+2. **In-frame (`--in-frame`, `--no-server-thread` or `HORIZON_SERVER_THREAD=0`):** the window's `Game` ticks
+   the world itself, one level that follows the player (`fn enter_dimension`). Most harnesses test this path.
 
 LAN guests and dedicated servers always use the server code, so a fix there serves both. Test both paths
 when you touch player-facing gameplay:
 
 ```sh
-cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T                   # in-frame
-cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T --server-thread   # server thread
+cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T               # server thread
+cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T --in-frame    # in-frame
 python3 tools/lan_e2e.py --check <name>                  # host in-frame, guest is a server client
 python3 tools/lan_e2e.py --server-thread --check <name>  # host on its server thread (portals, levels, distance, lava need it)
 python3 tools/parity.py dedicated_server server_entities server_player_damage

@@ -75,7 +75,7 @@ impl Environment {
 pub struct Filters {
     /// Every one of these categories (`decoration`, `worldgen`...).
     pub categories: Vec<String>,
-    /// One loader (`neoforge`, `fabric`, `iris`...), in place of the kind's defaults.
+    /// One loader (`neoforge`, `fabric`...), in place of the kind's defaults.
     pub loader: Option<String>,
     /// One Minecraft version, in place of the one Horizon plays.
     pub game_version: Option<String>,

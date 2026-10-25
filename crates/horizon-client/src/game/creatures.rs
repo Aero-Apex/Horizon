@@ -1007,6 +1007,11 @@ impl Game<'_> {
                 MobEvent::SetBlock { pos, state } => {
                     self.world.set(pos[0], pos[1], pos[2], state)?
                 }
+                MobEvent::SetDoorOpen { pos, open } => {
+                    let pos = BlockPos::new(pos[0], pos[1], pos[2]);
+                    self.with_level(|b, level, ticks| b.set_door_open(level, ticks, pos, open));
+                    self.process_level_events()?;
+                }
                 MobEvent::SetBlockName { pos, name, effect } => {
                     if effect {
                         let old = self.world.block(pos[0], pos[1], pos[2]);
@@ -1491,12 +1496,16 @@ impl Game<'_> {
                 o.hurt
             }
         {
-            let (xd, zd) = (from[0] - player.position.x, from[2] - player.position.z);
-            self.knock_back_player(f64::from(0.4_f32), xd, zd);
-            if let Some(p) = self.player.as_mut()
-                && let Some(r) = p.hurt_log.last_mut()
-            {
-                r.knockback = Some([p.velocity.x, p.velocity.y, p.velocity.z]);
+            // LivingEntity.hurtServer's dealDefaultKnockback: not inside the
+            // hurt cooldown (a stronger hit there only adds its difference).
+            if o.knockback {
+                let (xd, zd) = (from[0] - player.position.x, from[2] - player.position.z);
+                self.knock_back_player(f64::from(0.4_f32), xd, zd);
+                if let Some(p) = self.player.as_mut()
+                    && let Some(r) = p.hurt_log.last_mut()
+                {
+                    r.knockback = Some([p.velocity.x, p.velocity.y, p.velocity.z]);
+                }
             }
             self.hurt_armor(amount);
             self.thorns(from);

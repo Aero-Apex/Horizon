@@ -7,9 +7,9 @@
     python3 tools/release_train.py gate --kind game --smoke dist/smoke-test.json [--blockers]   # before publishing
 
 A kind releases when a pull request merged into main since its last published release changed one of its
-player-facing paths (GAME_PATHS, LAUNCHER_PATHS) and the newest of them merged at least DEBOUNCE ago (a burst
-of merges becomes one release), or the oldest at least MAX_WAIT ago (merges that never pause still ship), or when one
-of those pull requests is labelled release-now. Pull requests labelled skip-release (work players don't see) don't count
+player-facing paths (GAME_PATHS, LAUNCHER_PATHS), once BATCH of them are waiting and the newest merged at least
+DEBOUNCE ago (a burst of merges becomes one release), or once the oldest has waited MAX_WAIT (a lone fix still ships),
+or at once when one of those pull requests is labelled release-now. Pull requests labelled skip-release (work players don't see) don't count
 towards a release and aren't listed in the notes. RELEASES_PAUSED=1 (a repository variable) stops automatic releases,
 and an open issue labelled release-blocker stops game releases, even forced ones, until it is closed.
 
@@ -40,9 +40,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = os.environ.get("GITHUB_REPOSITORY", "ludovic111/horizon")
-# Releases ship constantly: a merge starts a release within minutes, once its wave of merges has settled.
+# Releases ship in batches, so players get a few releases a day rather than one per merge: BATCH player-facing pull
+# requests, settled for DEBOUNCE, or whatever is waiting once the oldest has waited MAX_WAIT.
+BATCH = 5
 DEBOUNCE = dt.timedelta(minutes=5)
-MAX_WAIT = dt.timedelta(minutes=20)
+MAX_WAIT = dt.timedelta(hours=6)
 # Kept as typed in release titles, where the clauses after the first are lowercased.
 PROPER = {"Horizon", "Horizon's", "Minecraft", "Mojang", "Microsoft", "Java", "Xbox", "PlayStation", "Steam", "Windows",
           "Linux", "LAN", "Kira", "Discord", "Wayland", "Hyprland", "F3", "GUI", "UI"}
@@ -71,12 +73,17 @@ LAUNCHER_PATHS = [
 ]
 LAUNCHER_IGNORED = ["launcher/links.json", "launcher/docs/", "launcher/tests/"]
 
-FOOTER = {
-    "game": "Install or update it from the Horizon launcher: it installs new versions by itself. "
-            "New here? Get the launcher at https://playhorizon.dev. You need your own copy of Minecraft: Java Edition.",
-    "launcher": "Your launcher updates itself. New here? Download the archive for your system below, extract it, "
-                "and run `horizon-launcher`. Website: https://playhorizon.dev",
-}
+# A game release is GitHub's latest (servers and install.sh follow it), so it is the first release people land on:
+# its notes open with the way to the launcher (#1647). Raw HTML on one line, which GitHub shows and every launcher's
+# notes view and one-line summary skip (pulldown-cmark's HTML events), so launchers never tell players to get
+# themselves. The site's Releases page leaves it out too.
+PLAYERS = ('<h3>Want to play? Download the <a href="https://playhorizon.dev">Horizon launcher</a>, not the files '
+           'below</h3><p>It installs this version and keeps it up to date. It is also on GitHub: <a href="'
+           f'https://github.com/{REPO}/releases?q=launcher&amp;expanded=true">the launcher releases</a>. You need your '
+           "own copy of Minecraft: Java Edition. The files below are what the launcher installs, and the dedicated "
+           "server for people who host one.</p>")
+LAUNCHER_FOOTER = ("Your launcher updates itself. New here? Download the archive for your system below, extract it, "
+                   "and run `horizon-launcher`. Website: https://playhorizon.dev")
 DISCLAIMER = "Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft."
 # An open issue with this label holds every game release (docs/release-flow.md). Only people who can triage the
 # repository can add it, and the issue's text is never read: its author could edit it afterwards.
@@ -287,7 +294,13 @@ def decision(kind, prs, now, paused=False, force=False, new_line=None, blockers=
         return False, "no merged pull request changed what players run"
     if urgent:
         return True, "release-now: " + ", ".join(f"#{pr['number']}" for pr in urgent)
-    if merged and now - max(merged) < DEBOUNCE and now - min(merged) < MAX_WAIT:
+    if merged and now - min(merged) >= MAX_WAIT:
+        return True, f"{len(counted)} pull requests changed what players run; the oldest has waited {MAX_WAIT.seconds // 3600} hours"
+    if len(counted) < BATCH:
+        wait = MAX_WAIT - (now - min(merged)) if merged else MAX_WAIT
+        return False, (f"{len(counted)} of {BATCH} pull requests: waiting for more, or {wait.seconds // 60 + 1} more "
+                       "minutes for the oldest")
+    if merged and now - max(merged) < DEBOUNCE:
         wait = DEBOUNCE - (now - max(merged))
         return False, f"{len(counted)} pull requests: waiting {wait.seconds // 60 + 1} more minutes for merges to settle"
     return True, f"{len(counted)} pull requests changed what players run"
@@ -365,7 +378,9 @@ def notes(kind, version, prs, issues, previous=None):
     else:
         title = f"Horizon launcher {version.removeprefix(OLD_LAUNCHER_PREFIX).removeprefix(LAUNCHER_PREFIX)}"
     intro = line_intro(kind, version, previous)
-    parts = [intro] if intro else []
+    parts = [PLAYERS] if kind == "game" else []
+    if intro:
+        parts.append(intro)
     if not shown:
         parts.append("Rebuilt from the latest main.")
     if new:
@@ -377,7 +392,8 @@ def notes(kind, version, prs, issues, previous=None):
     contributors = sorted({pr["author"] for pr in shown if pr["author"] and pr["author"] != REPO.split("/")[0]})
     if contributors:
         parts.append("Thanks to " + ", ".join(f"@{name}" for name in contributors) + ".")
-    parts.append(FOOTER[kind])
+    if kind == "launcher":
+        parts.append(LAUNCHER_FOOTER)
     parts.append(DISCLAIMER)
     return title, "\n\n".join(parts) + "\n"
 

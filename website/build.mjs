@@ -194,7 +194,7 @@ const baked = {
 
 const unavailable = `<p class="lede">The release notes could not be loaded here.</p><a class="button secondary" href="https://github.com/${REPO}/releases">Read them on GitHub</a>`;
 
-// The top bar and the footer of the pages beside the home page (Releases, Benchmarks).
+// The top bar and the footer of the pages beside the home page (Releases).
 const navLinks = [["/#about", "About"], ["/releases", "Releases"], ["/docs/", "Docs"]];
 const siteNav = (current) => `    <header class="nav is-scrolled" id="top">
       <div class="nav-inner">
@@ -224,7 +224,7 @@ const siteFooter = `    <footer class="footer">
       <div class="container">
         <div class="footer-bar">
           <span class="footer-mark">Made in the open, in Rust.</span>
-          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/releases">Releases</a><a href="/docs/">Docs</a><a href="https://github.com/${REPO}">GitHub</a><a href="/LEGAL.md">Assets</a></nav>
+          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/releases">Releases</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/LEGAL.md">Assets</a></nav>
         </div>
       </div>
       <p class="footer-word" aria-hidden="true">horizon</p>

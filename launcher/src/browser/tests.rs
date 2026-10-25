@@ -90,7 +90,7 @@ fn file_names_must_be_plain() {
     for good in [
         "Faithful 32x.zip",
         "FreshAnimations_v1.11.1_26.1+.zip",
-        "BSL_v10.zip",
+        "Faithful_v10.zip",
     ] {
         assert_eq!(safe_name(good), Some(good));
     }
@@ -293,15 +293,15 @@ fn curseforge_answers() {
     assert!(curseforge::parse_mod(&json!({"id": 1, "classId": 17})).is_none());
 
     let file = json!({
-        "id": 5000, "displayName": "BSL v10", "fileName": "BSL_v10.zip", "fileLength": 300,
-        "fileDate": "2026-01-01T00:00:00Z", "downloadUrl": "https://edge.forgecdn.net/files/5/0/BSL_v10.zip",
-        "gameVersions": ["1.21.1", "Iris"],
+        "id": 5000, "displayName": "JEI 19", "fileName": "jei-19.jar", "fileLength": 300,
+        "fileDate": "2026-01-01T00:00:00Z", "downloadUrl": "https://edge.forgecdn.net/files/5/0/jei-19.jar",
+        "gameVersions": ["1.21.1", "NeoForge"],
         "hashes": [{"value": "D41D8CD9", "algo": 2}, {"value": "DA39A3EE", "algo": 1}],
         "dependencies": [{"modId": 7, "relationType": 3}, {"modId": 8, "relationType": 2}]
     });
     let ver = curseforge::parse_file(&file).unwrap();
     assert_eq!(ver.required, ["7"]);
-    assert_eq!(ver.loaders, ["iris"]);
+    assert_eq!(ver.loaders, ["neoforge"]);
     assert_eq!(ver.file().unwrap().checksum(), Some(("SHA-1", "da39a3ee")));
     assert!(ver.blocked.is_none());
     let mut closed = file.clone();

@@ -87,7 +87,7 @@ pub(super) fn search_url(query: &Query) -> String {
     url
 }
 
-/// CurseForge mixes Minecraft versions and loader names (`Iris`, `OptiFine`, `NeoForge`) in one
+/// CurseForge mixes Minecraft versions and loader names (`Fabric`, `NeoForge`) in one
 /// list: digits first is a version, the rest are loaders, in lowercase as Modrinth names them.
 fn split_versions(list: &Value) -> (Vec<String>, Vec<String>) {
     let mut versions = Vec::new();

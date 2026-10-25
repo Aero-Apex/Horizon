@@ -53,7 +53,7 @@ Start the client.
 - `--world`: Open or create this world (a folder under saves) at once
 - `--creative`: Creative mode for a new world
 - `--join`: Join a friend's world with its invite code
-- `--arg`: An extra argument for the game, passed through as-is (repeatable), for example --in-frame
+- `--arg`: An extra argument for the game, passed through as-is (repeatable), for example --server-thread
 
 MCP: `play`, then the `game_*` tools.
 
@@ -143,7 +143,7 @@ MCP: `settings`.
 
 ## `horizon-launcher game-args`
 
-Show or set the extra arguments the game starts with (for example --in-frame); quotes group a word with spaces in it.
+Show or set the extra arguments the game starts with (for example --server-thread); quotes group a word with spaces in it.
 
     horizon-launcher game-args [ARGS]
 
@@ -181,81 +181,6 @@ Linux: put Horizon in the applications menu (an entry and the icon, under $XDG_D
 - `--remove`: Remove the entry and the icon, and stop adding them back
 
 MCP: `desktop_entry`.
-
-## `horizon-launcher data status`
-
-What is allowed, the install ID and how many items wait (the default).
-
-    horizon-launcher data status
-
-MCP: `data_status`.
-
-## `horizon-launcher data allow`
-
-Turn kinds on: performance, crashes, bugs, benchmarks, or all.
-
-    horizon-launcher data allow <KINDS>...
-
-- `KINDS`
-
-MCP: `data_allow`, only when the player asks.
-
-## `horizon-launcher data deny`
-
-Turn kinds off: performance, crashes, bugs, benchmarks, or all.
-
-    horizon-launcher data deny <KINDS>...
-
-- `KINDS`
-
-MCP: `data_deny`.
-
-## `horizon-launcher data show`
-
-Print exactly what would be sent.
-
-    horizon-launcher data show
-
-MCP: `data_show`.
-
-## `horizon-launcher data delete`
-
-Delete everything sent from here, and what waits, and take a new install ID.
-
-    horizon-launcher data delete
-
-MCP: `data_delete`, needs `confirm: true`.
-
-## `horizon-launcher data send`
-
-Send what is waiting now.
-
-    horizon-launcher data send
-
-MCP: `data_send`, only when the player asks.
-
-## `horizon-launcher data bug`
-
-Send a bug report you write; it is printed first, as it would leave.
-
-    horizon-launcher data bug <TEXT>
-
-- `TEXT`
-- `--log`: Add the end of the game's log (scrubbed, without chat)
-- `--yes`: Send without asking
-
-MCP: `data_bug`, only when the player asks.
-
-## `horizon-launcher data benchmark`
-
-Upload a benchmark report (docs/benchmark-report.md); it is printed first.
-
-    horizon-launcher data benchmark <FILE>
-
-- `FILE`
-- `--yes`
-
-MCP: `data_benchmark`, only when the player asks.
 
 ## `horizon-launcher modpack list`
 
@@ -321,7 +246,7 @@ Search for packs Horizon loads.
     horizon-launcher mods search [TEXT]...
 
 - `TEXT`
-- `--kind` (mod, resource, shader, modpack)
+- `--kind` (mod, resource, modpack)
 - `--everything`: Also what was made for other versions or runs only partly, each marked
 - `--source` (modrinth, curseforge)
 

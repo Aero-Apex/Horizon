@@ -736,9 +736,13 @@ pub struct Extra {
     /// The sniffer's and the ghastling's brain.
     pub animal_brain: Option<Box<animal_brain::Brain>>,
     pub axolotl: axolotl::Animation,
-    /// The mob this one rides, and the mob riding it (`getVehicle`, `getFirstPassenger`).
+    /// The mob or boat this one rides, and the mob riding it (`getVehicle`,
+    /// `getFirstPassenger`).
     pub mount: Option<u32>,
     pub rider: Option<u32>,
+    /// `Entity.boardingCooldown`: ticks after leaving a boat before a boat
+    /// can pick this mob up again.
+    pub boarding_cooldown: i32,
     /// A chicken carrying a zombie (`IsChickenJockey`).
     pub jockey: bool,
     /// A skeleton horse waiting to spring its trap, and how long it has waited.
@@ -986,6 +990,12 @@ pub enum MobEvent {
     SetBlock {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
+    },
+    /// `DoorBlock.setOpen` by a mob (`InteractWithDoor`): the door opens or
+    /// closes, both halves, with its sound and game event.
+    SetDoorOpen {
+        pos: [i32; 3],
+        open: bool,
     },
     /// Destroy a block, dropping nothing (sheep eating grass becomes dirt via SetBlock).
     BreakBlock {

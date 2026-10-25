@@ -1719,7 +1719,7 @@ impl OptionsUi {
                     return vec![Row::Header("No configurable options for this shader pack")];
                 };
                 let screen = cfg.current_screen();
-                let mut rows = vec![Row::Note(format!("{} — {}", cfg.id, screen.label))];
+                let mut rows = vec![Row::Note(format!("{} вЂ” {}", cfg.id, screen.label))];
                 if cfg.active_screen.is_some() {
                     rows.push(Row::Buttons(
                         button(
@@ -2559,7 +2559,9 @@ impl OptionsUi {
             let blink = self.pack_focus.elapsed().as_millis() as u64;
             let m = crate::screen_draw::Measure(&atlas.font);
             let mouse = (cursor.0.floor() as i32, cursor.1.floor() as i32);
-            let draws = self.packs(atlas, (w, h)).draw(&m, mouse, blink);
+            let packs = self.packs(atlas, (w, h));
+            let mut draws = packs.draw(&m, mouse, blink);
+            packs.bind_icons(&mut draws, atlas, &mut batch.patches);
             crate::screen_draw::paint(batch, atlas, &draws);
             return;
         }

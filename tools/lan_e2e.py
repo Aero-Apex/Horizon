@@ -222,6 +222,12 @@ address. The script then checks, from both sides, what a guest's game used to ge
              spider's bite poisons them (#1480, #1484).
 - cursor:    the host and the guest each close their inventory with a stack on the cursor: it
              goes back into their inventory, none is thrown and the cursor is empty (#1283).
+- knockback: the host hits the guest three times, then the guest the host, two seconds apart: each
+             hit slides the victim as far as vanilla's does, 1.989 blocks (a guest's server-side
+             velocity settles between hits; it used to add up, so each push went further).
+- villagers: the guest sees each villager's and zombie villager's type, profession and level as the
+             host has them, and an unemployed villager that takes a composter becomes a farmer on
+             the guest too (the guest used to draw every villager as an unemployed plains one).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -257,7 +263,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -4152,6 +4158,54 @@ def check_growth(host, guest, out):
     return detail
 
 
+def check_doors(host, guest, out):
+    """A villager shut in a room opens its oak door on its way to a free composter outside
+    (InteractWithDoor), takes the composter as its job site and closes the door behind it; the
+    guest sees the door open and close again."""
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    x, y, z = gx + 4, gy, gz - 8
+    lower, upper, composter, marker = (x + 2, y, z), (x + 2, y + 1, z), (x + 7, y, z), (x + 7, y, z + 2)
+    tag = 'dg_door_villager'
+    farmer = (f'execute if entity @e[type=minecraft:villager,tag={tag},'
+              f'nbt={{VillagerData:{{profession:"minecraft:farmer"}}}}] run setblock {marker[0]} {marker[1]} {marker[2]} '
+              'minecraft:gold_block')
+    seen = {'opened': False, 'farmer': False, 'closed': None}
+    try:
+        host('command', command='time set 2000')
+        host('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 9} {y - 1} {z + 3} minecraft:stone')
+        host('command', command=f'fill {x - 3} {y} {z - 3} {x + 9} {y + 3} {z + 3} minecraft:air')
+        host('command', command=f'fill {x - 2} {y} {z - 2} {x + 2} {y + 2} {z + 2} minecraft:oak_planks')
+        host('command', command=f'fill {x - 1} {y} {z - 1} {x + 1} {y + 1} {z + 1} minecraft:air')
+        for (bx, by, bz), half in ((lower, 'lower'), (upper, 'upper')):
+            host('command', command=f'setblock {bx} {by} {bz} minecraft:oak_door[facing=east,half={half},'
+                                    'hinge=left,open=false,powered=false]')
+        host('command', command=f'setblock {composter[0]} {composter[1]} {composter[2]} minecraft:composter')
+        host('command', command=f'summon minecraft:villager {x + 0.5} {y} {z + 0.5} {{Tags:["{tag}"],'
+                                'PersistenceRequired:1b,VillagerData:{profession:"minecraft:none",level:1,'
+                                'type:"minecraft:plains"}}')
+        for _ in range(120):
+            guest.wait(10)
+            seen['opened'] = seen['opened'] or state_of(guest, lower, 'open') == 'true'
+            host('command', command=farmer)
+            if host.raw('block', *marker).get('block') == 'minecraft:gold_block':
+                seen['farmer'] = True
+                break
+        seen['closed'] = wait_state(guest, lower, 'open', 'false', 200) == 'false'
+        seen['server_door'] = state_of(host, lower, 'open')
+        guest.raw('look-at', f'{lower[0] + 0.5:.2f}', f'{lower[1] + 1:.2f}', f'{lower[2] + 0.5:.2f}')
+        guest.wait(10)
+        guest.shot(out, 'doors')
+    finally:
+        host('command', command=f'kill @e[type=minecraft:villager,tag={tag}]')
+        host('command', command=f'fill {x - 3} {y} {z - 3} {x + 9} {y + 3} {z + 3} minecraft:air')
+        host('command', command='time set day')
+    assert seen['opened'], f'the villager never opened its door: {seen}'
+    assert seen['farmer'], f'the villager did not take the composter outside: {seen}'
+    assert seen['closed'] and seen['server_door'] == 'false', f'the villager left its door open: {seen}'
+    return seen
+
+
+
 def check_light(host, guest, out):
     gx, gy, gz = (int(v // 1) for v in pos_of(guest))
     results = {}
@@ -4413,7 +4467,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'eat': check_eat, 'eating': check_eating, 'xp': check_xp,
              'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates, 'swings': check_swings,
-             'cracks': check_cracks, 'time': check_time, 'growth': check_growth,
+             'cracks': check_cracks, 'time': check_time, 'growth': check_growth, 'doors': check_doors,
              'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect,
              'barter': check_barter, 'worn': check_worn, 'kills': check_kills,
              'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
@@ -5243,6 +5297,203 @@ def check_digging(host, guest, out):
 
 CHECKS += ['digging']
 CHECK_FNS.update(digging=check_digging)
+
+
+def check_vehicles(host, guest, out):
+    """The host and the guest each (#1551):
+    - in creative, break a block and have it put back: the server's dig ends with the break
+      (ServerPlayerGameMode.handleBlockBreakAction), so the block stays;
+    - land on a boat on the ground and stand on it (AbstractBoat.canBeCollidedWith);
+    - sit in a boat that lava reaches: lavaHurt twice a tick breaks it at once, and the rider is out;
+    - see a minecart in lava break, and a TNT minecart in lava prime and go off;
+    - stand half in a minecart off rails and push it away (AbstractMinecart.push from the server's
+      player)."""
+    result = {}
+    spots = apart(host, guest)
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = spots[label]
+        seen = result[label] = {}
+        near = lambda kind, at: [o for o in host('status')['objects'] if o['kind'].endswith(kind)
+                                 and abs(o['position'][0] - at[0]) < 2 and abs(o['position'][2] - at[2]) < 2]
+        try:
+            cell = (x, y + 1, z + 2)
+            player('command', command='gamemode creative')
+            player('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:stone')
+            player.wait(5)
+            player.raw('look-at', f'{x + 0.5:.2f}', f'{y + 1.5:.2f}', f'{z + 2.5:.2f}')
+            player.raw('mouse', 'left', 'click')
+            player.wait(5)
+            seen['broken'] = host.raw('block', *cell).get('block')
+            player('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:stone')
+            player.wait(20)
+            seen['put_back'] = [g.raw('block', *cell).get('block') for g in (host, player)]
+            player('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:air')
+
+            player('command', command='gamemode survival')
+            player('command', command='effect give @s minecraft:fire_resistance 300 0 true')
+            boat_at = (x + 0.5, y, z + 3.5)
+            player('command', command=f'summon minecraft:oak_boat {boat_at[0]} {y} {boat_at[2]}')
+            player.wait(10)
+            player('command', command=f'tp @s {boat_at[0]} {y + 1.2:.2f} {boat_at[2]}')
+            player.wait(20)
+            seen['on_boat'] = [round(pos_of(player)[1] - y, 3), round(server_player(host, player)['position'][1] - y, 3)]
+
+            player('command', command=f'tp @s {x + 0.5} {y} {z + 1.5} 0 0')
+            player.wait(10)
+            board(player, 'oak_boat', boat_at)
+            player('command', command=f'setblock {x} {y} {z + 3} minecraft:lava')
+            player.wait(10)
+            seen['rider'] = {'riding': player('status').get('riding'), 'boats': len(near('oak_boat', boat_at))}
+
+            player('command', command='gamemode creative')
+            player('command', command=f'summon minecraft:minecart {boat_at[0]} {y} {boat_at[2]}')
+            player.wait(10)
+            seen['minecart_in_lava'] = len(near('minecart', boat_at))
+            booms = player('status')['heard'].get('minecraft:entity.generic.explode', 0)
+            player('command', command=f'summon minecraft:tnt_minecart {boat_at[0]} {y} {boat_at[2]}')
+            player.wait(60)
+            seen['tnt_minecart'] = {'left': len(near('tnt_minecart', boat_at)),
+                                    'booms': player('status')['heard'].get('minecraft:entity.generic.explode', 0) - booms}
+
+            player('command', command=f'fill {x - 3} {y} {z - 3} {x + 4} {y + 3} {z + 6} minecraft:air')
+            player('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 4} {y - 1} {z + 6} minecraft:stone')
+            player('command', command='gamemode survival')
+            cart_at = (x + 0.5, y, z + 1.6)
+            player('command', command=f'summon minecraft:minecart {cart_at[0]} {y} {cart_at[2]}')
+            player.wait(10)
+            before = near('minecart', cart_at)[0]['position']
+            # Half into the cart from the north: it is pushed south until they are apart.
+            player('command', command=f'tp @s {x + 0.5} {y} {before[2] - 0.4:.2f} 0 0')
+            player.wait(20)
+            after = near('minecart', cart_at)[0]['position']
+            seen['cart_pushed'] = round(after[2] - before[2], 3)
+            player.shot(out, f'vehicles-{label}')
+        finally:
+            player('command', command='kill @e[type=minecraft:minecart]')
+            player('command', command='kill @e[type=minecraft:oak_boat]')
+            player('command', command='kill @e[type=minecraft:item]')
+            player('command', command=f'fill {x - 3} {y} {z - 3} {x + 4} {y + 3} {z + 6} minecraft:air')
+            player('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 4} {y - 1} {z + 6} minecraft:stone')
+            player('command', command='effect clear @s')
+            player('command', command='gamemode survival')
+            player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+            player.wait(5)
+    for label, seen in result.items():
+        assert seen['broken'] == 'minecraft:air', f'{label}: the creative click broke nothing: {seen}'
+        assert seen['put_back'] == ['minecraft:stone'] * 2, f'{label}: the server kept digging: {seen}'
+        assert all(0.5 < dy < 0.65 for dy in seen['on_boat']), f'{label}: not standing on the boat: {seen}'
+        assert seen['rider'] == {'riding': None, 'boats': 0}, f'{label}: lava left the boat or its rider: {seen}'
+        assert seen['minecart_in_lava'] == 0, f'{label}: a minecart outlived lava: {seen}'
+        assert seen['tnt_minecart'] == {'left': 0, 'booms': 1}, f'{label}: the TNT minecart in lava: {seen}'
+        assert seen['cart_pushed'] > 0.1, f'{label}: the minecart stayed in the player: {seen}'
+    return result
+
+
+CHECKS += ['vehicles']
+CHECK_FNS.update(vehicles=check_vehicles)
+
+
+# How far a plain wooden sword hit slides a standing player in vanilla: LivingEntity.knockback(0.4) from
+# the server copy's (0, -0.0784, 0), then the victim's own client.
+VANILLA_PUSH = 1.989
+
+
+def check_knockback(host, guest, out):
+    if dead(guest):
+        guest.raw('respawn')
+        guest.wait(40)
+    host('command', command='gamerule pvp true')
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='item replace entity @s weapon.mainhand with minecraft:wooden_sword')
+        g('command', command='effect give @s minecraft:resistance 1000 4 true')
+    face_each_other(host, guest)
+    pushes = {}
+    try:
+        for name, attacker, victim in (('host hits guest', host, guest), ('guest hits host', guest, host)):
+            # The victim is never teleported (a teleport resets its velocity): the attacker steps up to it from
+            # the west, then the east, then the west again.
+            for side in (-3, 3, -3):
+                vx, vy, vz = pos_of(victim)
+                attacker('command', command=f'tp @s {vx + side:.2f} {vy:.2f} {vz:.2f}')
+                attacker.wait(40)  # a full charge, and the last push long settled
+                attacker.raw('look-at', f'{vx:.2f}', f'{vy + 1.6:.2f}', f'{vz:.2f}')
+                attacker.wait(5)
+                before = pos_of(victim)
+                attacker.raw('attack')
+                victim.wait(30)
+                after = pos_of(victim)
+                pushes.setdefault(name, []).append(round(math.dist(before[0::2], after[0::2]), 3))
+            attacker.shot(out, 'knockback-' + name.replace(' ', '-'))
+    finally:
+        for g in (host, guest):
+            g('command', command='effect clear @s minecraft:resistance')
+    for name, distances in pushes.items():
+        assert all(abs(d - VANILLA_PUSH) < 0.03 for d in distances), f'{name}: not {VANILLA_PUSH} each time: {pushes}'
+    return pushes
+
+
+CHECKS += ['knockback']
+CHECK_FNS.update(knockback=check_knockback)
+
+
+def check_villagers(host, guest, out):
+    """Villager.DATA_VILLAGER_DATA and ZombieVillager's reach the guest: summoned villagers show
+    their type, profession and level, and an unemployed villager that takes a composter placed
+    afterwards turns into a farmer on the guest too (VillagerProfessionLayer draws from that data)."""
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    x, y, z = gx, gy, gz + 5
+    tag = 'vs_villager'
+    summoned = [('villager', -2, 'desert', 'librarian', 3), ('villager', 0, 'snow', 'weaponsmith', 5),
+                ('zombie_villager', 2, 'taiga', 'cleric', 2), ('villager', 4, 'plains', 'none', 1)]
+
+    def villagers(game):
+        return {e['id']: e['villager'] for e in game.raw('entities', 16)['entities'] if 'villager' in e}
+
+    seen = {}
+    try:
+        host('command', command='time set 2000')
+        host('command', command=f'fill {x - 4} {y - 1} {z - 3} {x + 6} {y - 1} {z + 4} minecraft:stone')
+        host('command', command=f'fill {x - 4} {y} {z - 3} {x + 6} {y + 3} {z + 4} minecraft:air')
+        for kind, dx, t, p, level in summoned:
+            # The unemployed one keeps its AI to take the job.
+            ai = '' if p == 'none' else 'NoAI:1b,Invulnerable:1b,'
+            host('command', command=f'summon minecraft:{kind} {x + dx + 0.5} {y} {z + 0.5} {{Tags:["{tag}"],{ai}'
+                                    f'PersistenceRequired:1b,Rotation:[180f,0f],'
+                                    f'VillagerData:{{type:"minecraft:{t}",profession:"minecraft:{p}",level:{level}}}}}')
+        guest.wait(20)
+        seen['summoned'] = {'host': villagers(host), 'guest': villagers(guest)}
+        host('command', command=f'setblock {x + 5} {y} {z + 2} minecraft:composter')
+        for waited in range(10, 1210, 10):
+            guest.wait(10)
+            farmers = [i for i, v in villagers(host).items() if v['profession'] == 'farmer']
+            if farmers:
+                seen['ticks to the job'] = waited
+                break
+        guest.wait(10)
+        seen['job'] = {'host': villagers(host), 'guest': villagers(guest)}
+        guest('command', command=f'tp @s {x + 1.5} {y} {z - 2.5} 0 10')
+        guest.wait(10)
+        guest.shot(out, 'villagers')
+    finally:
+        host('command', command=f'kill @e[tag={tag}]')
+        host('command', command=f'fill {x - 4} {y} {z - 3} {x + 6} {y + 3} {z + 4} minecraft:air')
+        host('command', command='time set day')
+    host_view, guest_view = seen['summoned']['host'], seen['summoned']['guest']
+    for _, _, t, p, level in summoned:
+        want = {'type': t, 'profession': p, 'level': level}
+        ids = [i for i, v in host_view.items() if v == want]
+        assert ids, f'the host lacks {want}: {seen}'
+        assert guest_view.get(ids[0]) == want, f'the guest sees {guest_view.get(ids[0])} for {want}: {seen}'
+    farmers = [i for i, v in seen['job']['host'].items() if v['profession'] == 'farmer']
+    assert farmers, f'no villager took the job: {seen}'
+    assert seen['job']['guest'].get(farmers[0]) == seen['job']['host'][farmers[0]], \
+        f'the guest missed the new job: {seen}'
+    return seen
+
+
+CHECKS += ['villagers']
+CHECK_FNS.update(villagers=check_villagers)
 
 
 if __name__ == '__main__':

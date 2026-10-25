@@ -304,6 +304,16 @@ impl Game<'_> {
         // A signed-in account always plays under its own name.
         let auth = horizon_client::auth::current();
         let name = auth.as_ref().map_or(name, |a| a.name.as_str());
+        let user = auth.as_ref().map_or_else(
+            || {
+                (
+                    name.to_owned(),
+                    horizon_protocol::crypto::offline_uuid(name),
+                )
+            },
+            |a| (a.name.clone(), a.uuid),
+        );
+        self.server_packs_connect(local.is_none().then_some(address), user);
         let session = match local {
             Some(pipe) => Session::connect_local(pipe, name, view, lang.clone()),
             None => {
@@ -451,6 +461,7 @@ impl Game<'_> {
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
+        self.server_packs_disconnect();
         // Single player's server thread saves the world before the title shows.
         let single_player = match self.integrated.take() {
             Some(server) => {
@@ -542,7 +553,7 @@ impl Game<'_> {
     /// (`LivingEntity.forceAddEffect`): the effect replaces any of its kind.
     /// Other entities' effects are not shown.
     fn remote_effect(&mut self, p: &play::UpdateMobEffect) {
-        if !self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+        if self.remote.as_ref().is_none_or(|r| r.entity_id != p.id) {
             return;
         }
         let Some(id) = self.remote_effect_id(p.effect) else {
@@ -825,6 +836,8 @@ impl Game<'_> {
                     }
                 }
                 Event::Reconfigured(registries) => self.set_registries(registries),
+                Event::PackPush(p) => self.handle_pack_push(p),
+                Event::PackPop(id) => self.handle_pack_pop(id),
                 Event::DecodeError(e) => {
                     if let Some(r) = self.remote.as_mut() {
                         r.decode_errors += 1;
@@ -1988,6 +2001,15 @@ impl Game<'_> {
                                 }
                                 self.sleeping = *bed;
                             }
+                            // Entity.DATA_SHARED_FLAGS_ID's sprinting bit: the
+                            // server stops the sprint after a hit's extra
+                            // knockback (the flag only, as assignValues sets
+                            // it: the speed modifier and wasSprinting stay).
+                            (0, Value::Byte(flags)) => {
+                                if let Some(pl) = self.player.as_mut() {
+                                    pl.sprinting = flags & 0x08 != 0;
+                                }
+                            }
                             // Entity.DATA_AIR_SUPPLY_ID and
                             // Player.DATA_PLAYER_ABSORPTION_ID: the bubbles
                             // and golden hearts the server's player has.
@@ -3070,7 +3092,7 @@ impl Game<'_> {
         self.sleep_timer = super::tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
         // Gui.tick: the titles, the action bar and the held item's name.
         self.tick_hud();
-        let ghast_collisions = self.happy_ghast_player_collisions();
+        let entity_collisions = self.player_entity_collisions();
         let pushed = self.remote_pushes();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
@@ -3125,6 +3147,9 @@ impl Game<'_> {
             | u8::from(keys.sprint) << 6;
         // A passenger moves with its vehicle (Entity.rideTick), not by itself.
         let riding = self.screen != Screen::Dead && self.remote_ride(keys);
+        // The server sends no passenger's position: they sit where their
+        // vehicles are now.
+        self.position_riders();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -3154,7 +3179,7 @@ impl Game<'_> {
         } else if !dead && !riding {
             player.velocity = player.velocity.add_vector(pushed);
             MotionWorld {
-                entities: &ghast_collisions,
+                entities: &entity_collisions,
                 player,
                 scene: &mut self.world,
                 assets: &self.pack.assets,
@@ -3235,9 +3260,10 @@ impl Game<'_> {
         player.flying_speed = a.flying_speed;
     }
     /// The local player's share of every touching entity's
-    /// `LivingEntity.pushEntities`: on a client `EntitySelector.pushableBy`
-    /// lets entities push only the local player, so the server never sends
-    /// these pushes. `doPush(player)` is `player.push(entity)`.
+    /// `LivingEntity.pushEntities`, and of the boats' pushes: on a client
+    /// `EntitySelector.pushableBy` lets entities push only the local player,
+    /// so the server never sends these pushes. `doPush(player)` is
+    /// `player.push(entity)`.
     fn remote_pushes(&self) -> Vec3 {
         let (Some(p), Some(r)) = (self.player.as_ref(), self.remote.as_ref()) else {
             return Vec3::ZERO;
@@ -3296,11 +3322,51 @@ impl Game<'_> {
             za *= f64::from(0.05_f32);
             push = Vec3::new(push.x - xa, push.y, push.z - za);
         }
+        // AbstractBoat.push(player) from the boat's own tick (its box grown
+        // by 0.2 sideways) and from the player's pushEntities (its box).
+        let player_team = teams.of(Who::Player);
+        let area = Vec3::new(f64::from(0.2_f32), f64::from(-0.01_f32), f64::from(0.2_f32));
+        for b in self.boats.iter().filter(|b| self.riding != Some(b.id)) {
+            let bb = b.bounds();
+            let times = usize::from(
+                bounds.intersects(bb.inflate(area))
+                    && horizon_client::scoreboard::pushable_by(None, player_team, true),
+            ) + usize::from(
+                bounds.intersects(bb)
+                    && horizon_client::scoreboard::pushable_by(player_team, None, true),
+            );
+            if times > 0
+                && super::boat_passengers::boat_pushes(bb, bounds, false)
+                && let Some(v) = super::boat_passengers::push_impulse(b.position, p.position)
+            {
+                push = push.add_vector(v.scale(times as f64));
+            }
+        }
         push
     }
     /// ClientLevel.tickEntities; a frozen level only ticks the players
     /// (`TickRateManager.isEntityFrozen`).
     fn tick_remote_entities(&mut self, running: bool) {
+        // EntityFluidInteraction.update for the entities this window only displays: the
+        // server never sends the fluid contact, and the renderers read it (cod, salmon and
+        // tropical fish lie on their side without `in_water`, #1591).
+        // A frozen level ticks only the players, as below.
+        let fluids: Vec<_> = {
+            let w = self.mob_world_base(&[]);
+            let players = self.remote.as_ref().map(|r| &r.level_players);
+            self.mobs
+                .iter()
+                .map(|m| {
+                    (running || players.is_some_and(|p| p.contains_key(&(m.id as i32))))
+                        .then(|| w.fluids(m.bounds(), m.eye_y()))
+                })
+                .collect()
+        };
+        for (m, fluids) in self.mobs.iter_mut().zip(fluids) {
+            if let Some(fluids) = fluids {
+                m.fluids = fluids;
+            }
+        }
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -4307,8 +4373,7 @@ impl Game<'_> {
     /// Keys with a multiplayer meaning; returns true when consumed.
     pub(super) fn remote_key(&mut self, key: KeyCode) -> Result<bool> {
         if self.screen != Screen::Playing {
-            if key == KeyCode::KeyE && self.screen == Screen::Inventory
-                || key == KeyCode::Escape && self.screen == Screen::Inventory
+            if (key == KeyCode::KeyE || key == KeyCode::Escape) && self.screen == Screen::Inventory
             {
                 self.remote_close_container();
                 self.screen = Screen::Playing;

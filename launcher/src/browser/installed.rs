@@ -43,7 +43,18 @@ pub struct Entry {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Installed {
+    /// An entry this launcher can't read (a kind it doesn't know) is left out, and its file left
+    /// where it is. Shader packs, which older launchers installed, are read like any other entry.
+    #[serde(deserialize_with = "readable_entries")]
     pub entries: Vec<Entry>,
+}
+
+fn readable_entries<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Entry>, D::Error> {
+    let entries = Vec::<serde_json::Value>::deserialize(d)?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|e| serde_json::from_value(e).ok())
+        .collect())
 }
 
 impl Installed {

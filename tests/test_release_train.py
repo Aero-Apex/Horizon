@@ -106,29 +106,36 @@ class ReleaseTrainTests(unittest.TestCase):
     def test_the_first_release_of_0_2_says_what_changed(self):
         title, body = train.notes("game", "v0.2.0", [pr(1)], [], previous="v2026.10.21")
         self.assertTrue(title.startswith("Horizon 0.2.0: "), title)
+        body = body.removeprefix(train.PLAYERS + "\n\n")
         self.assertTrue(body.startswith("Horizon is numbered from now on: this is Horizon 0.2.0, the release after 2026.10.21."))
         self.assertIn("`horizon-server update --version v0.2.0`", body)
         title, body = train.notes("launcher", "launcher@0.2.0", [], [], previous="launcher-v0.17.0")
         self.assertEqual(title, "Horizon launcher 0.2.0")
         self.assertIn("the release after launcher 0.17.0", body)
         self.assertIn("Rebuilt from the latest main.", body)
-        self.assertTrue(train.notes("game", "v0.3.0", [pr(1)], [], previous="v0.2.14")[1].startswith("The first release of Horizon 0.3."))
+        body = train.notes("game", "v0.3.0", [pr(1)], [], previous="v0.2.14")[1]
+        self.assertTrue(body.startswith(train.PLAYERS + "\n\nThe first release of Horizon 0.3."))
         for version, previous in [("v0.2.1", "v0.2.0"), ("v0.3.0-rc.1", "v0.2.9"), ("v2026.10.23", "v2026.10.21")]:
             body = train.notes("game", version, [pr(1)], [], previous=previous)[1]
-            self.assertTrue(body.startswith("### Fixed"), (version, body))
+            self.assertTrue(body.startswith(train.PLAYERS + "\n\n### Fixed"), (version, body))
 
     def test_decision(self):
         minute = dt.timedelta(minutes=1)
         decide = lambda prs, **kw: train.decision("game", prs, NOW, **kw)[0]
-        self.assertTrue(decide([pr(1, merged=6 * minute)]), "settled for the debounce")
-        self.assertFalse(decide([pr(1, merged=2 * minute)]), "merged moments ago")
-        self.assertFalse(decide([pr(1, merged=15 * minute), pr(2, merged=2 * minute)]), "a burst still merging")
-        self.assertTrue(decide([pr(1, merged=21 * minute), pr(2, merged=minute)]), "merges that never pause still ship")
+        hour = 60 * minute
+        five = lambda newest: [pr(n, merged=newest + n * minute) for n in range(5)]
+        self.assertTrue(decide(five(6 * minute)), "a batch, settled for the debounce")
+        self.assertFalse(decide(five(2 * minute)), "a batch still merging")
+        self.assertFalse(decide(five(6 * minute)[:4]), "not yet a batch")
+        self.assertFalse(decide([pr(1, merged=5 * hour)]), "a lone fix waits for others")
+        self.assertTrue(decide([pr(1, merged=6 * hour)]), "until the oldest has waited 6 hours")
+        self.assertTrue(decide([pr(1, merged=7 * hour), pr(2, merged=minute)]), "merges that never pause still ship")
+        self.assertFalse(decide([pr(n, merged=6 * minute) for n in range(4)] + [pr(9, labels=["skip-release"])]),
+                         "work players don't see doesn't fill a batch")
         self.assertTrue(decide([pr(1, labels=["release-now"], merged=minute)]))
         self.assertFalse(decide([pr(1, paths=[])]), "nothing players run")
         self.assertFalse(decide([pr(1, labels=["skip-release"])]))
         self.assertFalse(decide([pr(1, labels=["release-now", "skip-release"])]))
-        self.assertFalse(decide([pr(1, merged=3 * minute), pr(2, labels=["skip-release"], merged=minute)]), "the settled one waits for nothing")
         self.assertFalse(decide([pr(1)], paused=True))
         self.assertTrue(decide([], paused=True, force=True))
 
@@ -196,6 +203,18 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertEqual(title, "Horizon launcher 0.2.0")
         self.assertIn("### Fixed\n- Launcher: say the self-update succeeded (#3)", body)
         self.assertNotIn("Known issues", body)
+        self.assertNotIn(train.PLAYERS, body)
+        self.assertIn("Your launcher updates itself.", body)
+
+    def test_a_game_release_opens_with_the_way_to_the_launcher(self):
+        # GitHub's latest is a game release: whoever lands on it is sent to the launcher first (#1647).
+        _, body = train.notes("game", "v0.2.50", [pr(1)], ["- Sound cuts out after an hour."])
+        self.assertTrue(body.startswith('<h3>Want to play? Download the <a href="https://playhorizon.dev">Horizon launcher'))
+        self.assertIn('href="https://github.com/ludovic111/horizon/releases?q=launcher&amp;expanded=true"', body)
+        self.assertNotIn("\n", train.PLAYERS, "one line: one HTML block, which ends at the blank line after it")
+        self.assertEqual(body.count("playhorizon.dev"), 1, "said once, at the top")
+        _, body = train.notes("game", "v0.2.51", [], [])
+        self.assertTrue(body.startswith(train.PLAYERS + "\n\nRebuilt from the latest main."))
 
     def test_known_issues_are_the_bullets_of_the_file(self):
         with tempfile.TemporaryDirectory() as temp:

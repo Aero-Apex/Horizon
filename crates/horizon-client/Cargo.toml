@@ -27,15 +27,13 @@ bytemuck = { version = "1.24", features = ["derive"] }
 glam = "0.30"
 png = "0.18"
 sha2 = "0.10.9"
+# Server resource packs are checked and cached by their SHA-1, as vanilla does.
+sha1 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
-# Shader packs: pack.toml, and WGSL checked before it reaches wgpu.
-toml = "1.1"
 # hlsl-out: the gfx.rs tests translate every shader as wgpu's DirectX 12 backend does. A normal feature,
 # not a dev-dependency's, so builds, tests and examples share one build of naga, wgpu and this crate.
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out"] }
-# Java (OptiFine/Iris) shader packs, translated to WGSL.
-horizon-shaderpack = { path = "../horizon-shaderpack" }
 # Sound (ALSA on Linux); the `audio` feature.
 cpal = { version = "0.16", optional = true }
 symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
@@ -45,6 +43,8 @@ log = "0.4"
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 horizon-theme = { path = "../horizon-theme" }
+horizon-shaderpack = { path = "../horizon-shaderpack" }
+toml = "1.1"
 horizon-bench = { path = "../horizon-bench" }
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
@@ -81,6 +81,11 @@ controllers = ["dep:gilrs", "dep:horizon-dualsense"]
 mods = ["horizon-mods/runtime"]
 # Records the call sites of mob random draws (`mob_ai_probe` traces).
 rng-trace = ["horizon-core/rng-trace"]
+
+# Its own name, not `probe`: Cargo copies every crate's examples into one target/<profile>/examples.
+[[example]]
+name = "client_probe"
+path = "examples/probe/main.rs"
 
 [lints]
 workspace = true

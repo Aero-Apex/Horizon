@@ -123,7 +123,7 @@ pub struct Project {
     pub icon: Option<String>,
     pub license: String,
     pub kind: Kind,
-    /// The Minecraft versions its files list, and the loaders (`iris`, `optifine`, `minecraft`...).
+    /// The Minecraft versions its files list, and the loaders (`fabric`, `neoforge`, `minecraft`...).
     pub game_versions: Vec<String>,
     pub loaders: Vec<String>,
 }

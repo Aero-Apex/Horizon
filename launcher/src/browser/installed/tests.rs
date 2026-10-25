@@ -332,3 +332,28 @@ fn java_mods_are_ported_turned_on_refused_on_clashes_and_removed() {
     );
     fs::remove_dir_all(&home).unwrap();
 }
+
+#[test]
+fn shader_packs_older_launchers_installed_are_kept() {
+    let home = home("old-shader-pack");
+    fs::create_dir_all(home.join("shaderpacks")).unwrap();
+    fs::write(home.join("shaderpacks/old-pack.zip"), b"shaders").unwrap();
+    let entry = |kind: &str, file: &str| {
+        serde_json::json!({
+            "source": "modrinth", "project": file, "slug": file, "title": file, "kind": kind,
+            "version": "1", "number": "1", "file": file, "checksum": "SHA-512:00", "page": ""
+        })
+    };
+    let manifest = serde_json::json!({ "entries": [
+        entry("shader-pack", "shaderpacks/old-pack.zip"),
+        entry("resource-pack", "resourcepacks/faithful-1.zip"),
+    ]});
+    fs::write(home.join("mod-browser.json"), manifest.to_string()).unwrap();
+    let installed = Installed::load(&home);
+    assert_eq!(installed.entries.len(), 2);
+    assert_eq!(installed.entries[0].kind, Kind::ShaderPack);
+    assert_eq!(installed.entries[1].kind, Kind::ResourcePack);
+    installed.save(&home).unwrap();
+    assert!(home.join("shaderpacks/old-pack.zip").is_file());
+    fs::remove_dir_all(&home).unwrap();
+}
