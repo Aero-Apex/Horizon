@@ -1002,7 +1002,7 @@ pub fn render_with(
                 let shifted =
                     camera - glam::DVec3::new(off[0] + w[0], off[1] + w[1], off[2] + w[2]);
                 let base = base_transform(m, alpha, shifted);
-                render_visible(m, alpha, base, atlas, light, data, extra, out);
+                render_visible(m, alpha, base, camera, atlas, light, data, extra, out);
             }
         }
         return;
@@ -1011,6 +1011,7 @@ pub fn render_with(
         m,
         alpha,
         base_transform(m, alpha, camera),
+        camera,
         atlas,
         light,
         data,
@@ -1030,13 +1031,15 @@ pub fn render_posed(
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform_at(m, alpha, origin);
-    render_visible(m, alpha, base, atlas, light, data, &[], out);
+    let here = glam::DVec3::new(m.position.x, m.position.y, m.position.z);
+    render_visible(m, alpha, base, here, atlas, light, data, &[], out);
 }
 #[allow(clippy::too_many_arguments)]
 fn render_visible(
     m: &Mob,
     alpha: f32,
     base: glam::Mat4,
+    camera: glam::DVec3,
     atlas: Atlas,
     light: u32,
     data: &MobData,
@@ -1051,8 +1054,23 @@ fn render_visible(
         .layer(&model_key)
         .cloned()
         .unwrap_or_else(|| m.kind.model.clone());
+    // A resource pack's custom entity model (OptiFine's CEM) takes the model's place.
+    let cem = data
+        .cem
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let custom = custom_model(&cem, m, &model_key, &model);
+    let model = custom.as_ref().map_or(model, |c| c.tree.clone());
+    let texture = custom
+        .as_ref()
+        .and_then(|c| c.texture.clone())
+        .filter(|t| atlas(t).is_some())
+        .unwrap_or(texture);
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
+    if let Some(custom) = &custom {
+        cem.animate(custom, m, &s, camera, &mut poses);
+    }
     let draw_body = |out: &mut Vec<Vertex>| {
         if let Some(uv) = atlas(&texture) {
             draw(
@@ -1096,8 +1114,13 @@ fn render_visible(
         let Some(uv) = atlas(&layer.texture) else {
             continue;
         };
+        let custom = custom_model(&cem, m, &layer.model, &part);
+        let part = custom.as_ref().map_or(part, |c| c.tree.clone());
         let mut poses = Poses::new(&part);
         anim::setup(m, &s, &mut poses, &data.animations);
+        if let Some(custom) = &custom {
+            cem.animate(custom, m, &s, camera, &mut poses);
+        }
         if matches!(m.species(), Species::Villager | Species::ZombieVillager)
             && let Some((folder, variant)) = layer
                 .texture
@@ -1133,6 +1156,18 @@ fn render_visible(
     if shell_last {
         draw_body(out);
     }
+}
+/// The pack's custom model for one of the mob's model layers, when it has one.
+fn custom_model(
+    cem: &crate::cem::Cem,
+    m: &Mob,
+    key: &str,
+    vanilla: &std::sync::Arc<Part>,
+) -> Option<std::sync::Arc<crate::cem::Built>> {
+    if cem.is_empty() {
+        return None;
+    }
+    cem.model(&crate::cem::model_name(m, key), key, vanilla)
 }
 /// The equipment slot of a `HumanoidArmorLayer` model (`zombie#helmet`).
 fn armor_slot(model: &str) -> Option<usize> {
@@ -1333,6 +1368,7 @@ mod tests {
             biome_tags: Default::default(),
             entity_tags: Default::default(),
             villager_hats: Default::default(),
+            cem: Default::default(),
             pois: Default::default(),
         };
         let atlas = |name: &str| {

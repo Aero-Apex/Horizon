@@ -76,3 +76,11 @@ LambdAurora, whose source is under **The Lambda License**. That license allows s
 source with the original authors listed, but **sharing binaries needs the authors' written approval**.
 Builds containing this port are for private use until that approval is given. Original:
 https://github.com/LambdAurora/LambDynamicLights/blob/26.3/LICENSE
+
+## Entity Model Features
+Custom entity models (`cem.rs`, `cem/expr.rs`, `cem/jem.rs`) read OptiFine's CEM format (`.jem`, `.jpm`,
+`.properties`, and the animation expressions) as [Entity Model Features](https://github.com/Traben-0/Entity_Model_Features)
+by Traben reads it: how a part hangs from the entity's own model part, the axis flips and box layouts, the
+expression grammar and functions, the variables, and the OptiFine-to-vanilla part names in
+`assets/cem/optifine_parts.json` (from its `EMFModelMappings`, for Minecraft 26.3). EMF is licensed under the GNU Lesser
+General Public License 3.0 or later; its source is at the link, and this project's changes are the Rust rewrite.

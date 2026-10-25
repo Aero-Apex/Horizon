@@ -32,6 +32,7 @@ pub mod bundle;
 pub mod camera;
 pub mod cauldron;
 pub mod chat;
+pub mod cem;
 pub mod chunk;
 pub mod chunk_map;
 pub mod clipboard;

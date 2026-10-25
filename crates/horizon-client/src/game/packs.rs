@@ -201,6 +201,14 @@ impl Game<'_> {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             horizon_client::mobs::villager_hats::VillagerHats::load(root);
+        // And the pack's custom entity models.
+        *self
+            .res
+            .mob_data()
+            .cem
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            horizon_client::cem::Cem::load(root);
         horizon_client::ui::load_metadata(root);
         lang::set(lang::Language::load(&[&root.to_path_buf()], &lang::code()));
         self.audio.reload(root);

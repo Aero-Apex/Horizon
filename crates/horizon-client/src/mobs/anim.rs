@@ -166,6 +166,22 @@ impl Poses {
     pub fn is_hidden(&self, part: &Part) -> bool {
         self.hidden.contains(&part.name)
     }
+    /// `ModelPart.visible`, by part name.
+    pub fn is_hidden_name(&self, name: &str) -> bool {
+        self.hidden.contains(name)
+    }
+    /// `ModelPart.skipDraw`, by part name.
+    pub fn skips_name(&self, name: &str) -> bool {
+        self.skipped.contains(name)
+    }
+    /// `skipDraw = !draw`: whether the part's own boxes show.
+    pub fn draw_boxes(&mut self, name: &str, draw: bool) {
+        if draw {
+            self.skipped.remove(name);
+        } else if self.map.contains_key(name) {
+            self.skipped.insert(name.to_owned());
+        }
+    }
 }
 /// The LivingEntityRenderState values setupAnim reads.
 #[derive(Clone, Copy, Debug)]

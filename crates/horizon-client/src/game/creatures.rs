@@ -2964,11 +2964,52 @@ impl Game<'_> {
             }
         }
     }
+    /// The pack's custom model of a mob picks a variant by the blocks around it
+    /// (OptiFine's `.properties` rules: a cow over grass grazes).
+    fn set_custom_model_rule(&self, mob: &Mob) {
+        let cem = self
+            .res
+            .mob_data()
+            .cem
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cem.is_empty() {
+            return;
+        }
+        let (key, _) = horizon_client::mobs::render::body(mob);
+        let name = horizon_client::cem::model_name(mob, &key);
+        let facts = self.res.facts();
+        let block = |dy: i32| -> &str {
+            let x = mob.position.x.floor() as i32;
+            let y = mob.position.y.floor() as i32 + dy;
+            let z = mob.position.z.floor() as i32;
+            &facts.get(self.world.block(x, y, z)).name
+        };
+        let under = if cem.wants_blocks(&name) {
+            horizon_client::cem::Under {
+                at: block(0),
+                below: block(-1),
+            }
+        } else {
+            Default::default()
+        };
+        cem.set_rule(&name, mob, under);
+    }
     /// Mob models and projectiles for the entity pass.
     pub(super) fn mob_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let scale = f64::from(self.settings.entity_distance);
+        // The pack's custom entity models: one tick of their clock per frame.
+        {
+            let cem = self
+                .res
+                .mob_data()
+                .cem
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cem.begin_frame(self.ticks, self.screen == super::Screen::Paused);
+        }
         for mob in &self.mobs {
             let entity_start = out.len();
             // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws.
@@ -3016,6 +3057,7 @@ impl Game<'_> {
                     out,
                 );
             }
+            self.set_custom_model_rule(mob);
             // Other players on a server: PlayerRenderer's HumanoidArmorLayer.
             let armor = if &*mob.kind.id == "minecraft:player" {
                 self.worn_armor_layers(mob)
