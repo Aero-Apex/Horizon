@@ -2151,6 +2151,18 @@ impl Game<'_> {
                 {
                     horizon_client::mobs::rabbit::hop_event(m);
                 }
+                // IronGolem.handleEntityEvent: 4 swings its arms (attackAnimationTick),
+                // 11 and 34 start and stop offering a poppy (offerFlowerTick).
+                if matches!(p.event, 4 | 11 | 34)
+                    && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                    && m.species() == horizon_client::mobs::Species::IronGolem
+                {
+                    match p.event {
+                        4 => m.extra.anim_ticks = 10,
+                        11 => m.extra.counter = 400,
+                        _ => m.extra.counter = 0,
+                    }
+                }
                 // EntityEvent.DEATH: start the death animation.
                 if p.event == 3
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)

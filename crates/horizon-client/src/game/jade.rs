@@ -264,6 +264,8 @@ impl Game<'_> {
         if !self.settings.extras.jade
             || self.title.is_some()
             || !matches!(self.screen, Screen::Playing | Screen::Chat)
+            // The player list (Tab) takes the top of the screen.
+            || self.keys.contains(&winit::keyboard::KeyCode::Tab)
         {
             return;
         }
