@@ -570,6 +570,7 @@ pub fn main() -> horizon_client::Result<()> {
                     pose,
                     num("maxCrossbowChageDuration"),
                     num("ticksUsingItem"),
+                    false,
                 );
             }
             Species::Evoker | Species::Illusioner | Species::Pillager | Species::Vindicator => {
