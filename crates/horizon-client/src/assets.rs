@@ -221,6 +221,8 @@ impl RenderAssets {
         }
         let ctm = crate::ctm::Ctm::load(root, registry, &mut sprites, &models.catalog);
         sprites.finish();
+        // `finish` grows the buffer by doubling: keep only the bytes in use.
+        sprites.pixels.shrink_to_fit();
         Ok(Self {
             sprite_size: sprites.size,
             sprite_minimum_size: sprites.minimum_size,
